@@ -1,36 +1,77 @@
-import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
-from config import BOT_TOKEN
+from config import (
+    BOT_TOKEN, WEBHOOK_PATH, WEBHOOK_URL, WEBHOOK_SECRET, WEBHOOK_HOST, PORT,
+)
 from state import store
 from handlers import admin, user, reactions
 
+logging.basicConfig(level=logging.INFO)
 
-async def main():
-    logging.basicConfig(level=logging.INFO)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher(storage=MemoryStorage())
 
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher(storage=MemoryStorage())
+# TARTIB MUHIM:
+# 1) admin - komandalar va FSM holatlari (masalan broadcast matni kutish)
+# 2) user  - /generate, oddiy matn (prompt sifatida)
+# 3) reactions - faqat guruh xabarlari, eng oxirida, hech narsani "yutmasin"
+dp.include_router(admin.router)
+dp.include_router(user.router)
+dp.include_router(reactions.router)
 
+
+async def health(request: web.Request) -> web.Response:
+    """UptimeRobot va Render uchun oddiy health-check"""
+    return web.Response(text="OK")
+
+
+async def on_startup(app: web.Application):
     # Guruhdagi pin qilingan bot_state.json dan holatni tiklaymiz
     await store.load(bot)
 
-    # TARTIB MUHIM:
-    # 1) admin - komandalar va FSM holatlari (masalan broadcast matni kutish)
-    # 2) user  - /generate, oddiy matn (prompt sifatida)
-    # 3) reactions - faqat guruh xabarlari, eng oxirida, hech narsani "yutmasin"
-    dp.include_router(admin.router)
-    dp.include_router(user.router)
-    dp.include_router(reactions.router)
+    if not WEBHOOK_HOST:
+        logging.warning(
+            "WEBHOOK_HOST (RENDER_EXTERNAL_URL) topilmadi - webhook o'rnatilmadi! "
+            "Render'da bu avtomatik bo'lishi kerak."
+        )
+        return
 
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    await bot.set_webhook(
+        url=WEBHOOK_URL,
+        secret_token=WEBHOOK_SECRET,
+        drop_pending_updates=True,
+    )
+    logging.info(f"Webhook o'rnatildi: {WEBHOOK_URL}")
+
+
+async def on_shutdown(app: web.Application):
+    await bot.delete_webhook()
+    await bot.session.close()
+
+
+def create_app() -> web.Application:
+    app = web.Application()
+    app.router.add_get("/", health)
+
+    webhook_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        secret_token=WEBHOOK_SECRET,
+    )
+    webhook_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
+
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    return app
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    web.run_app(create_app(), host="0.0.0.0", port=PORT)
