@@ -46,7 +46,8 @@ async def _do_generate(message: Message, bot: Bot, prompt: str):
 
     try:
         img_bytes = await generate_image(prompt)
-    except Exception:
+    except Exception as e:
+        print(f"[generate] Pollinations xatosi (prompt={prompt!r}): {type(e).__name__}: {e}")
         await status.edit_text("❌ Xatolik yuz berdi. Birozdan so'ng qaytadan urinib ko'ring.")
         return
 
