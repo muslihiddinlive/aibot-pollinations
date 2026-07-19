@@ -31,8 +31,13 @@ PORT = int(os.getenv("PORT", "10000"))
 # Har bir userga sutkalik standart limit
 DEFAULT_DAILY_LIMIT = 5
 
-# Guruhga pin qilinadigan "database" fayl nomi
-STATE_FILENAME = "bot_state.json"
+# Guruhga pin qilinadigan "database" fayl nomi (HTML - ko'rinishi chiroyli,
+# ichida esa qayta tiklash uchun JSON embed qilingan)
+STATE_FILENAME = "bot_state.html"
+
+# Har bir o'zgarishdan keyin nechchi soniyadan so'ng DB faylga yozilsin
+# (bir nechta o'zgarish ketma-ket kelsa, bittasiga birlashtirib saqlaydi)
+SAVE_DEBOUNCE_SECONDS = 2
 
 # Taqiqlangan so'zlar (butun so'z sifatida tekshiriladi, substring emas).
 # "am" kabi juda qisqa/keng tarqalgan so'zlar yolg'on signal berishi mumkin -
