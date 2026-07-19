@@ -2,7 +2,7 @@
 "Database" qatlami.
 
 Ishlash printsipi:
-- Butun bot holati (userlar, limitlar, kodlar, taqiqlangan so'zlar, emoji ID'lar,
+- Butun bot holati (userlar, tariflar, kodlar, taqiqlangan so'zlar, emoji ID'lar,
   adminlar, rasm keshi) bitta JSON obyekt sifatida RAMda saqlanadi (CACHE).
 - Har bir o'zgarishdan SAVE_DEBOUNCE_SECONDS soniya o'tib (bir nechta o'zgarish
   ketma-ket kelsa - bittasiga birlashtirilib) shu JSON chiroyli HTML hisobot
@@ -10,6 +10,10 @@ Ishlash printsipi:
   guruhiga yuboriladi va PIN qilinadi (DATABASE, doimiy saqlash).
 - Bot qayta ishga tushganda guruhdagi pin qilingan xabardan HTML faylni o'qib,
   ichidagi JSON'ni ajratib olib cache'ni tiklaydi.
+
+Limit tizimi endi TARIF asosida: har user "free"/"pro"/"plus"/"vip" tarifga ega,
+har tarifning o'z kunlik limiti bor (store.data["tariffs"] ichida, superadmin
+o'zgartira oladi). Superadmin/admin userga faqat TARIF beradi, raw limit emas.
 """
 
 import asyncio
@@ -20,7 +24,10 @@ from datetime import date, timedelta
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
-from config import DB_GROUP_ID, STATE_FILENAME, DEFAULT_DAILY_LIMIT, SUPERADMIN_ID, SAVE_DEBOUNCE_SECONDS
+from config import (
+    DB_GROUP_ID, STATE_FILENAME, SUPERADMIN_ID, SAVE_DEBOUNCE_SECONDS,
+    DEFAULT_TARIFFS, TARIFF_ORDER,
+)
 
 UNLIMITED = 10 ** 9  # superadmin/admin uchun "cheksiz" limit ko'rsatkichi
 
@@ -29,10 +36,11 @@ _DEFAULT_STATE = {
     "admins": [],           # superadmin belgilagan qo'shimcha adminlar
     "reaction_admins": [],  # kimlarning xabariga premium reaksiya bosiladi
     "reaction_emoji_id": None,  # premium reaksiya uchun custom emoji id
-    "codes": {},            # code -> {"type", "amount", "days", "used", "used_by"}
-    "banned_words": [],     # config.BANNED_WORDS ustiga runtime qo'shimchalar
-    "custom_emojis": {},    # key -> custom_emoji_id (xabarlarni emoji bilan bezash uchun)
-    "image_cache": [],      # admin/superadmin DB ga tashlagan rasmlar: {file_id, by, at, caption}
+    "tariffs": DEFAULT_TARIFFS,  # superadmin o'zgartira oladigan tarif sozlamalari
+    "codes": {},             # code -> {"tariff", "days", "used", "used_by"}
+    "banned_words": [],      # config.BANNED_WORDS ustiga runtime qo'shimchalar
+    "custom_emojis": {},     # key -> custom_emoji_id (xabarlarni emoji bilan bezash uchun)
+    "image_cache": [],       # admin/superadmin DB ga tashlagan rasmlar: {file_id, by, at, caption}
     "pinned_message_id": None,
 }
 
@@ -50,8 +58,8 @@ class Store:
 
     async def load(self, bot: Bot):
         """Guruhdagi pin qilingan bot_state.html (yoki eski bot_state.json) faylini o'qib,
-        cache'ni tiklaydi. Eski JSON formatidan yangi HTML formatiga o'tishda ma'lumot
-        yo'qolib ketmasligi uchun ikkalasini ham qo'llab-quvvatlaymiz."""
+        cache'ni tiklaydi. Eski formatlardan yangisiga o'tishda ma'lumot yo'qolib
+        ketmasligi uchun moslashtirib olamiz."""
         try:
             chat = await bot.get_chat(DB_GROUP_ID)
             pinned = chat.pinned_message
@@ -63,28 +71,31 @@ class Store:
                 raw = buf.read().decode("utf-8")
 
                 if pinned.document.file_name == "bot_state.json":
-                    # eski (JSON) format - to'g'ridan-to'g'ri o'qiymiz
                     loaded = json.loads(raw)
                 else:
                     start = raw.index(_JSON_START) + len(_JSON_START)
                     end = raw.index(_JSON_END, start)
                     loaded = json.loads(raw[start:end])
 
-                # yangi versiyada qo'shilgan kalitlar bo'lsa, defaultlar bilan to'ldiramiz
                 for k, v in _DEFAULT_STATE.items():
                     loaded.setdefault(k, json.loads(json.dumps(v)))
-                # eski userlarga yangi maydonlarni qo'shib qo'yamiz
+
                 for u in loaded.get("users", {}).values():
                     u.setdefault("images_generated", 0)
                     u.setdefault("generated_images", [])
-                # eski kod formatida "limit_add"/"days" bo'lgan, yangisida "amount"/"type" kerak
-                for c in loaded.get("codes", {}).values():
-                    if "amount" not in c and "limit_add" in c:
-                        c["amount"] = c.pop("limit_add")
-                    c.setdefault("type", "daily")
+                    u.setdefault("tariff", "free")
+                    u.setdefault("tariff_until", None)
+                    u.setdefault("ref_count", 0)
+                    u.setdefault("referred_by", None)
+                    # eski "daily_limit"/"extra_limit" maydonlari endi ishlatilmaydi,
+                    # lekin xatolik chiqmasligi uchun tegmasdan qoldiramiz.
 
-                # eski JSON fayl bo'lsa, keyingi saqlashda yangi HTML fayl sifatida
-                # QAYTA yuborilishi kerak (eski pin o'chirilib, yangisi yaratiladi)
+                # eski raw-limit kodlarini tarif tizimiga moslashtiramiz
+                for c in loaded.get("codes", {}).values():
+                    if "tariff" not in c:
+                        c["tariff"] = "pro"
+                    c.setdefault("days", None)
+
                 if pinned.document.file_name == "bot_state.json":
                     loaded["pinned_message_id"] = None
                 else:
@@ -95,8 +106,6 @@ class Store:
         self._loaded = True
 
     def schedule_save(self, bot: Bot):
-        """SAVE_DEBOUNCE_SECONDS soniyadan keyin saqlaydi; shu oraliqda yana chaqirilsa,
-        eskisi bekor qilinib qayta hisoblanadi (ketma-ket o'zgarishlar bittaga birlashadi)."""
         if self._save_task and not self._save_task.done():
             self._save_task.cancel()
         self._save_task = asyncio.create_task(self._debounced_save(bot))
@@ -112,7 +121,6 @@ class Store:
             print(f"[state] debounced save xatosi: {e}")
 
     async def save(self, bot: Bot):
-        """Cache'ni HTML hisobot qilib guruhga yuboradi/yangilaydi va pin qiladi (darhol, kutmasdan)."""
         payload = self._build_html()
         file = BufferedInputFile(payload, filename=STATE_FILENAME)
 
@@ -128,7 +136,6 @@ class Store:
             else:
                 raise ValueError("pinned_message_id yo'q")
         except Exception:
-            # birinchi marta yoki eski xabar topilmadi -> yangi yuboramiz va pin qilamiz
             sent = await bot.send_document(
                 DB_GROUP_ID, file, caption="🗄 bot_state.html (avto-yangilanadi)"
             )
@@ -167,29 +174,39 @@ class Store:
                 f"<td>{esc(u.get('username') or '—')}</td>"
                 f"<td>{esc(u.get('first_seen', '—'))}</td>"
                 f"<td>{esc(u.get('images_generated', 0))}</td>"
-                f"<td>{esc(u.get('daily_limit', 0))}</td>"
-                f"<td>{esc(u.get('extra_limit', 0))}</td>"
+                f"<td>{esc(u.get('tariff', 'free'))}</td>"
+                f"<td>{esc(u.get('tariff_until') or 'doimiy')}</td>"
+                f"<td>{esc(u.get('ref_count', 0))}</td>"
                 f"<td>{'🚫' if u.get('banned') else '—'}</td>"
                 "</tr>"
             )
-        users_table = "\n".join(user_rows) or "<tr><td colspan='7'>—</td></tr>"
+        users_table = "\n".join(user_rows) or "<tr><td colspan='8'>—</td></tr>"
 
         code_rows = []
         for code, c in d.get("codes", {}).items():
             code_rows.append(
                 "<tr>"
                 f"<td>{esc(code)}</td>"
-                f"<td>{esc(c.get('type', 'onetime'))}</td>"
-                f"<td>{esc(c.get('amount'))}</td>"
-                f"<td>{esc(c.get('days') or '—')}</td>"
+                f"<td>{esc(c.get('tariff'))}</td>"
+                f"<td>{esc(c.get('days') or 'doimiy')}</td>"
                 f"<td>{'✅ ishlatilgan (' + esc(c.get('used_by')) + ')' if c.get('used') else '🟢 band emas'}</td>"
                 "</tr>"
             )
-        codes_table = "\n".join(code_rows) or "<tr><td colspan='5'>—</td></tr>"
+        codes_table = "\n".join(code_rows) or "<tr><td colspan='4'>—</td></tr>"
+
+        tariff_rows = []
+        for name, t in d.get("tariffs", {}).items():
+            tariff_rows.append(
+                "<tr>"
+                f"<td>{esc(name)}</td><td>{esc(t.get('daily_limit'))}</td>"
+                f"<td>{esc(t.get('price_stars'))}</td><td>{esc(t.get('ref_required'))}</td>"
+                f"<td>{esc(t.get('grantable_by'))}</td>"
+                "</tr>"
+            )
+        tariffs_table = "\n".join(tariff_rows)
 
         admins = d.get("admins", [])
         admin_rows = "".join(f"<li>{esc(a)}</li>" for a in admins) or "<li>—</li>"
-
         cache = d.get("image_cache", [])
 
         html_out = f"""<!DOCTYPE html>
@@ -206,13 +223,18 @@ tr:nth-child(even){{background:#151821}}
 <h1>🗄 Bot Database</h1>
 <p class="meta">Superadmin: {esc(SUPERADMIN_ID)} | Yangilangan: {esc(date.today())}</p>
 
+<h2>💳 Tariflar</h2>
+<table><tr><th>Nomi</th><th>Kunlik limit</th><th>Narx (stars)</th><th>Referal talabi</th><th>Kim beradi</th></tr>
+{tariffs_table}
+</table>
+
 <h2>👥 Userlar ({len(users)} ta)</h2>
-<table><tr><th>ID</th><th>Username</th><th>Qo'shilgan</th><th>Rasmlar</th><th>Kunlik</th><th>Qo'shimcha</th><th>Ban</th></tr>
+<table><tr><th>ID</th><th>Username</th><th>Qo'shilgan</th><th>Rasmlar</th><th>Tarif</th><th>Muddat</th><th>Refs</th><th>Ban</th></tr>
 {users_table}
 </table>
 
 <h2>🔑 Kodlar ({len(d.get('codes', {}))} ta)</h2>
-<table><tr><th>Kod</th><th>Turi</th><th>Miqdor</th><th>Kun</th><th>Holat</th></tr>
+<table><tr><th>Kod</th><th>Tarif</th><th>Kun</th><th>Holat</th></tr>
 {codes_table}
 </table>
 
@@ -234,7 +256,6 @@ tr:nth-child(even){{background:#151821}}
         return user_id == SUPERADMIN_ID or user_id in self.data.get("admins", [])
 
     def is_unlimited(self, user_id: int) -> bool:
-        # superadmin va u tayinlagan adminlar - cheksiz limit
         return self.is_admin_user(user_id)
 
     # ---------- user helpers ----------
@@ -246,21 +267,27 @@ tr:nth-child(even){{background:#151821}}
                 "id": user_id,
                 "username": username,
                 "first_seen": str(date.today()),
-                "daily_limit": DEFAULT_DAILY_LIMIT,
+                "tariff": "free",
+                "tariff_until": None,   # None = muddatsiz; aks holda "YYYY-MM-DD"
                 "used_today": 0,
                 "last_reset": str(date.today()),
-                "extra_limit": 0,
-                "extra_limit_until": None,
                 "banned": False,
-                "prompts": [],           # so'nggi promptlar log (qisqa tarix)
-                "images_generated": 0,   # jami yaratilgan rasmlar soni
-                "generated_images": [],  # so'nggi yaratilgan rasmlar (file_id + prompt)
+                "prompts": [],
+                "images_generated": 0,
+                "generated_images": [],
+                "ref_count": 0,
+                "referred_by": None,
             }
         else:
+            u = self.data["users"][uid]
             if username:
-                self.data["users"][uid]["username"] = username
-            self.data["users"][uid].setdefault("images_generated", 0)
-            self.data["users"][uid].setdefault("generated_images", [])
+                u["username"] = username
+            u.setdefault("images_generated", 0)
+            u.setdefault("generated_images", [])
+            u.setdefault("tariff", "free")
+            u.setdefault("tariff_until", None)
+            u.setdefault("ref_count", 0)
+            u.setdefault("referred_by", None)
         return self.data["users"][uid]
 
     def _reset_if_new_day(self, user: dict):
@@ -268,18 +295,23 @@ tr:nth-child(even){{background:#151821}}
         if user["last_reset"] != today:
             user["last_reset"] = today
             user["used_today"] = 0
-            # extra_limit muddati o'tgan bo'lsa, tozalaymiz
-            if user.get("extra_limit_until") and user["extra_limit_until"] < today:
-                user["extra_limit"] = 0
-                user["extra_limit_until"] = None
+        if user.get("tariff_until") and user["tariff_until"] < today:
+            user["tariff"] = "free"
+            user["tariff_until"] = None
+
+    def tariff_daily_limit(self, tariff_name: str) -> int:
+        t = self.data.get("tariffs", {}).get(tariff_name)
+        if not t:
+            t = DEFAULT_TARIFFS.get(tariff_name, DEFAULT_TARIFFS["free"])
+        return t["daily_limit"]
 
     def remaining_limit(self, user_id: int) -> int:
         if self.is_unlimited(user_id):
             return UNLIMITED
         user = self.get_user(user_id)
         self._reset_if_new_day(user)
-        total = user["daily_limit"] + user.get("extra_limit", 0)
-        return max(0, total - user["used_today"])
+        daily = self.tariff_daily_limit(user.get("tariff", "free"))
+        return max(0, daily - user["used_today"])
 
     def consume_limit(self, user_id: int, amount: int = 1):
         user = self.get_user(user_id)
@@ -288,39 +320,25 @@ tr:nth-child(even){{background:#151821}}
 
     def log_prompt(self, user_id: int, prompt: str, blocked: bool = False):
         user = self.get_user(user_id)
-        user["prompts"].append({
-            "prompt": prompt,
-            "at": str(date.today()),
-            "blocked": blocked,
-        })
-        # faqat oxirgi 50 tasini saqlaymiz, fayl shishib ketmasin
+        user["prompts"].append({"prompt": prompt, "at": str(date.today()), "blocked": blocked})
         user["prompts"] = user["prompts"][-50:]
 
     def log_image(self, user_id: int, file_id: str, prompt: str):
         user = self.get_user(user_id)
         user["images_generated"] = user.get("images_generated", 0) + 1
-        user.setdefault("generated_images", []).append({
-            "file_id": file_id,
-            "prompt": prompt,
-            "at": str(date.today()),
-        })
+        user.setdefault("generated_images", []).append(
+            {"file_id": file_id, "prompt": prompt, "at": str(date.today())}
+        )
         user["generated_images"] = user["generated_images"][-20:]
 
-    def grant_limit(self, user_id: int, amount: int, days: int):
-        """Muddatli (kunlik) bonus limit - `days` kun davomida har kuni +amount beriladi."""
+    def grant_tariff(self, user_id: int, tariff_name: str, days: int | None = None):
+        """Superadmin/admin userga tarif beradi. days=None -> muddatsiz."""
         user = self.get_user(user_id)
-        until = date.today() + timedelta(days=days)
-        user["extra_limit"] = user.get("extra_limit", 0) + amount
-        user["extra_limit_until"] = str(until)
-
-    def grant_permanent(self, user_id: int, amount: int):
-        """Bir martalik - foydalanuvchining doimiy kunlik limitiga qo'shib qo'yiladi (muddatsiz)."""
-        user = self.get_user(user_id)
-        user["daily_limit"] = user.get("daily_limit", DEFAULT_DAILY_LIMIT) + amount
+        user["tariff"] = tariff_name
+        user["tariff_until"] = str(date.today() + timedelta(days=days)) if days else None
 
     def set_banned(self, user_id: int, banned: bool):
-        user = self.get_user(user_id)
-        user["banned"] = banned
+        self.get_user(user_id)["banned"] = banned
 
     def all_banned_words(self):
         from config import BANNED_WORDS
@@ -331,16 +349,40 @@ tr:nth-child(even){{background:#151821}}
         ranked = sorted(users.items(), key=lambda kv: -kv[1].get("images_generated", 0))
         return [(uid, u) for uid, u in ranked if u.get("images_generated", 0) > 0][:n]
 
+    # ---------- referal tizimi ----------
+
+    def register_referral(self, referrer_id: int, new_user_id: int) -> tuple[bool, str | None]:
+        """Yangi user birinchi marta referal havola orqali kirganda chaqiriladi.
+        Qaytaradi: (hisoblandi_mi, agar avto-tarif berilgan bo'lsa yangi tarif nomi)."""
+        if referrer_id == new_user_id:
+            return False, None
+        if str(referrer_id) not in self.data["users"]:
+            return False, None
+        new_user = self.get_user(new_user_id)
+        if new_user.get("referred_by"):
+            return False, None  # allaqachon boshqa referaldan kirgan
+
+        new_user["referred_by"] = referrer_id
+        referrer = self.get_user(referrer_id)
+        referrer["ref_count"] = referrer.get("ref_count", 0) + 1
+
+        upgraded_to = None
+        current_idx = TARIFF_ORDER.index(referrer.get("tariff", "free")) if referrer.get("tariff", "free") in TARIFF_ORDER else 0
+        for name in reversed(TARIFF_ORDER):
+            req = self.data.get("tariffs", {}).get(name, {}).get("ref_required", 0)
+            if req and referrer["ref_count"] >= req and TARIFF_ORDER.index(name) > current_idx:
+                referrer["tariff"] = name
+                referrer["tariff_until"] = None
+                upgraded_to = name
+                break
+        return True, upgraded_to
+
     # ---------- rasm keshi ----------
 
     def add_image_cache(self, file_id: str, by: int, caption: str | None = None):
         self.data.setdefault("image_cache", []).append({
-            "file_id": file_id,
-            "by": by,
-            "at": str(date.today()),
-            "caption": caption or "",
+            "file_id": file_id, "by": by, "at": str(date.today()), "caption": caption or "",
         })
-        # cheksiz o'smasin
         self.data["image_cache"] = self.data["image_cache"][-500:]
 
 

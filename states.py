@@ -2,16 +2,14 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class GenCode(StatesGroup):
-    """Superadmin panelidan kod yaratish. Tur (bir martalik/kunlik) inline
-    tugma orqali FSM data'ga yoziladi, keyin shu state'lar ishga tushadi."""
-    waiting_amount = State()
-    waiting_days = State()  # faqat "daily" turi uchun
+    """Superadmin panelidan tarif-kod yaratish. Tarif inline tugma orqali FSM
+    data'ga yoziladi, so'ng shu state kutiladi (kunlar soni)."""
+    waiting_days = State()
 
 
-class DirectGrant(StatesGroup):
-    """Foydalanuvchi kartochkasidan to'g'ridan-to'g'ri (kodsiz) limit berish."""
-    waiting_amount = State()
-    waiting_days = State()  # faqat "daily" turi uchun
+class TariffGrant(StatesGroup):
+    """Foydalanuvchi kartochkasidan to'g'ridan-to'g'ri tarif berish."""
+    waiting_days = State()
 
 
 class Broadcast(StatesGroup):

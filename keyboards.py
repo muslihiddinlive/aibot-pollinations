@@ -8,7 +8,8 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="🎨 Rasm yaratish"), KeyboardButton(text="📊 Limitim")],
         [KeyboardButton(text="🔑 Kod kiritish"), KeyboardButton(text="🏆 Reyting")],
-        [KeyboardButton(text="💳 Tarif sotib olish"), KeyboardButton(text="✉️ Adminga murojaat")],
+        [KeyboardButton(text="💳 Tarif sotib olish"), KeyboardButton(text="🔗 Referal havolam")],
+        [KeyboardButton(text="✉️ Adminga murojaat")],
     ]
     if is_admin:
         keyboard.append([KeyboardButton(text="🛠 Admin panel")])
@@ -19,7 +20,8 @@ def admin_panel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="admusers")],
         [InlineKeyboardButton(text="📢 Habar yuborish (broadcast)", callback_data="admbroadcast")],
-        [InlineKeyboardButton(text="🔑 Kod yaratish", callback_data="admgencode")],
+        [InlineKeyboardButton(text="🔑 Tarif-kod yaratish", callback_data="admgencode")],
+        [InlineKeyboardButton(text="💳 Tariflar sozlamasi", callback_data="admtariffs")],
         [InlineKeyboardButton(text="🚫 Taqiqlangan so'zlar", callback_data="admwords")],
         [InlineKeyboardButton(text="😀 Custom emoji", callback_data="admemoji")],
         [InlineKeyboardButton(text="✏️ Xabarni emoji bilan tahrirlash", callback_data="admeditemoji")],
@@ -56,7 +58,7 @@ def users_list_kb(users: dict, page: int = 0, per_page: int = 15) -> InlineKeybo
 
 def user_detail_kb(uid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Limit berish", callback_data=f"admgrantopen:{uid}")],
+        [InlineKeyboardButton(text="🎫 Tarif berish", callback_data=f"admgrantopen:{uid}")],
         [InlineKeyboardButton(text="🖼 Yaratgan rasmlari", callback_data=f"admimgs:{uid}")],
         [InlineKeyboardButton(text="✉️ Xabar yozish", callback_data=f"admmsguser:{uid}")],
         [InlineKeyboardButton(text="🚫 Ban/Unban", callback_data=f"admban:{uid}")],
@@ -64,23 +66,28 @@ def user_detail_kb(uid: str) -> InlineKeyboardMarkup:
     ])
 
 
-def grant_type_kb(uid: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔂 Bir martalik (doimiy qo'shiladi)", callback_data=f"admgrant:onetime:{uid}")],
-        [InlineKeyboardButton(text="📅 Kunlik limit (muddatli)", callback_data=f"admgrant:daily:{uid}")],
-        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admcancel")],
-    ])
-
-
-def gencode_type_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔂 Bir martalik (doimiy qo'shiladi)", callback_data="admgencodetype:onetime")],
-        [InlineKeyboardButton(text="📅 Kunlik limit (muddatli)", callback_data="admgencodetype:daily")],
-        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admcancel")],
-    ])
+def tariff_choice_kb(callback_prefix: str, tariffs: list, uid: str = "") -> InlineKeyboardMarkup:
+    """callback_prefix: masalan 'admgrant' yoki 'admgencodetariff'.
+    tariffs: shu adminga ruxsat etilgan tarif nomlari ro'yxati."""
+    from config import TARIFF_LABELS
+    suffix = f":{uid}" if uid else ""
+    rows = [
+        [InlineKeyboardButton(text=TARIFF_LABELS.get(t, t), callback_data=f"{callback_prefix}:{t}{suffix}")]
+        for t in tariffs
+    ]
+    rows.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="admcancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def manage_admins_kb(admins: list) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text=f"❌ {a}", callback_data=f"admdeladmin:{a}")] for a in admins]
     rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admcancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def tariff_purchase_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐ Pro so'rash", callback_data="tariffreq:pro")],
+        [InlineKeyboardButton(text="💎 Plus so'rash", callback_data="tariffreq:plus")],
+        [InlineKeyboardButton(text="👑 VIP so'rash", callback_data="tariffreq:vip")],
+    ])

@@ -3,15 +3,15 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, MessageEntity
 from aiogram.fsm.context import FSMContext
 
-from config import SUPERADMIN_ID
+from config import SUPERADMIN_ID, TARIFF_ORDER, TARIFF_LABELS
 from state import store, UNLIMITED
 from codes import generate_code
 from keyboards import (
     admin_panel, cancel_kb, users_list_kb, user_detail_kb,
-    grant_type_kb, gencode_type_kb, manage_admins_kb,
+    tariff_choice_kb, manage_admins_kb,
 )
 from states import (
-    GenCode, DirectGrant, Broadcast, WordsManage, EmojiManage,
+    GenCode, TariffGrant, Broadcast, WordsManage, EmojiManage,
     SendToUser, EditMessageEmoji,
 )
 from emoji_utils import build_emoji_entities
@@ -26,6 +26,20 @@ def is_admin(user_id: int) -> bool:
 def is_superadmin(user_id: int) -> bool:
     """Faqat asosiy egasi - adminlarni tayinlash/olib tashlash shu darajaga tegishli."""
     return user_id == SUPERADMIN_ID
+
+
+def allowed_grant_tariffs(caller_id: int) -> list[str]:
+    """Shu admin/superadmin kimga qaysi tariflarni bera olishini qaytaradi."""
+    if is_superadmin(caller_id):
+        return TARIFF_ORDER  # hammasi, shu jumladan "free" ga qaytarish
+    if is_admin(caller_id):
+        allowed = []
+        for name in TARIFF_ORDER:
+            gb = store.data.get("tariffs", {}).get(name, {}).get("grantable_by")
+            if gb == "admin":
+                allowed.append(name)
+        return allowed
+    return []
 
 
 def _fmt_limit(uid: int) -> str:
@@ -99,17 +113,21 @@ async def _render_user_detail(call: CallbackQuery, uid: str):
     if not u:
         return await call.message.edit_text("Topilmadi.", reply_markup=cancel_kb())
     left = _fmt_limit(int(uid))
-    tariff = f"kunlik {u.get('daily_limit', 0)} + qo'shimcha {u.get('extra_limit', 0)}"
-    if u.get("extra_limit_until"):
-        tariff += f" ({u['extra_limit_until']} gacha)"
+    tariff = u.get("tariff", "free")
+    tariff_text = TARIFF_LABELS.get(tariff, tariff)
+    if u.get("tariff_until"):
+        tariff_text += f" ({u['tariff_until']} gacha)"
+    else:
+        tariff_text += " (doimiy)"
     ban_text = "ha" if u.get("banned") else "yo'q"
     text = (
         f"👤 <b>{u.get('username') or '—'}</b>\n"
         f"🆔 ID: <code>{uid}</code>\n"
         f"📅 Qo'shilgan: {u.get('first_seen', '—')}\n"
         f"🖼 Yaratgan rasmlar: {u.get('images_generated', 0)}\n"
-        f"💳 Tarif: {tariff}\n"
+        f"💳 Tarif: {tariff_text}\n"
         f"⏳ Hozir qolgan limit: {left}\n"
+        f"🔗 Referallari: {u.get('ref_count', 0)} ta\n"
         f"🚫 Ban: {ban_text}"
     )
     await call.message.edit_text(text, reply_markup=user_detail_kb(uid))
@@ -181,66 +199,48 @@ async def do_msg_user(message: Message, state: FSMContext, bot: Bot):
         await message.answer(f"❌ Yuborib bo'lmadi: {e}")
 
 
-# ---------- Limit berish (userga, kodsiz) ----------
+# ---------- Tarif berish (userga, kodsiz) ----------
 
 @router.callback_query(F.data.startswith("admgrantopen:"))
 async def cb_grant_open(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
     uid = call.data.split(":", 1)[1]
-    await call.message.edit_text("Limit turini tanlang:", reply_markup=grant_type_kb(uid))
+    allowed = allowed_grant_tariffs(call.from_user.id)
+    if not allowed:
+        return await call.answer("Sizga tarif berish huquqi berilmagan.", show_alert=True)
+    await call.message.edit_text("Qaysi tarifni berasiz?", reply_markup=tariff_choice_kb("admgrant", allowed, uid))
     await call.answer()
 
 
 @router.callback_query(F.data.startswith("admgrant:"))
-async def cb_grant_type(call: CallbackQuery, state: FSMContext):
+async def cb_grant_tariff(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    _, gtype, uid = call.data.split(":", 2)
-    await state.set_state(DirectGrant.waiting_amount)
-    await state.update_data(target_uid=int(uid), grant_type=gtype)
-    await call.message.answer("Nechta rasm limiti qo'shilsin?", reply_markup=cancel_kb())
+    _, tariff, uid = call.data.split(":", 2)
+    if tariff not in allowed_grant_tariffs(call.from_user.id):
+        return await call.answer("Sizga bu tarifni berish huquqi yo'q.", show_alert=True)
+    await state.set_state(TariffGrant.waiting_days)
+    await state.update_data(target_uid=int(uid), tariff=tariff)
+    await call.message.answer("Necha kunga beriladi? (0 = muddatsiz)", reply_markup=cancel_kb())
     await call.answer()
 
 
-@router.message(DirectGrant.waiting_amount)
-async def direct_grant_amount(message: Message, state: FSMContext, bot: Bot):
-    try:
-        amount = int(message.text.strip())
-    except ValueError:
-        return await message.answer("❌ Raqam kiriting.")
-    data = await state.get_data()
-    if data.get("grant_type") == "onetime":
-        store.grant_permanent(data["target_uid"], amount)
-        store.schedule_save(bot)
-        await state.clear()
-        await message.answer(f"✅ User {data['target_uid']} ga +{amount} limit doimiy qo'shildi.")
-        try:
-            await bot.send_message(data["target_uid"], f"🎁 Sizga +{amount} ta doimiy limit berildi.")
-        except Exception:
-            pass
-        return
-    await state.update_data(amount=amount)
-    await state.set_state(DirectGrant.waiting_days)
-    await message.answer("Necha kunga amal qiladi?")
-
-
-@router.message(DirectGrant.waiting_days)
-async def direct_grant_days(message: Message, state: FSMContext, bot: Bot):
+@router.message(TariffGrant.waiting_days)
+async def tariff_grant_days(message: Message, state: FSMContext, bot: Bot):
     try:
         days = int(message.text.strip())
     except ValueError:
-        return await message.answer("❌ Raqam kiriting.")
+        return await message.answer("❌ Raqam kiriting (0 = muddatsiz).")
     data = await state.get_data()
     await state.clear()
-    store.grant_limit(data["target_uid"], data["amount"], days)
+    store.grant_tariff(data["target_uid"], data["tariff"], days if days > 0 else None)
     store.schedule_save(bot)
-    await message.answer(f"✅ User {data['target_uid']} ga +{data['amount']} limit, {days} kunga berildi.")
+    label = TARIFF_LABELS.get(data["tariff"], data["tariff"])
+    muddat = f"{days} kunga" if days > 0 else "muddatsiz"
+    await message.answer(f"✅ User {data['target_uid']} ga {label} tarifi berildi ({muddat}).")
     try:
-        await bot.send_message(
-            data["target_uid"],
-            f"🎁 Sizga +{data['amount']} ta qo'shimcha limit berildi ({days} kunga amal qiladi).",
-        )
+        await bot.send_message(data["target_uid"], f"🎁 Sizga {label} tarifi berildi ({muddat}).")
     except Exception:
         pass
 
@@ -271,57 +271,30 @@ async def do_broadcast(message: Message, state: FSMContext, bot: Bot):
     await message.answer(f"📢 Yuborildi: {sent} ta, xato: {failed} ta.")
 
 
-# ---------- Kod yaratish (bir martalik / kunlik) ----------
+# ---------- Tarif-kod yaratish ----------
 
 @router.callback_query(F.data == "admgencode")
 async def cb_gencode(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    await call.message.edit_text("Kod qanday turdagi limit bersin?", reply_markup=gencode_type_kb())
+    allowed = allowed_grant_tariffs(call.from_user.id)
+    if not allowed:
+        return await call.answer("Sizga kod yaratish huquqi berilmagan.", show_alert=True)
+    await call.message.edit_text("Kod qaysi tarifni bersin?", reply_markup=tariff_choice_kb("admgencodetariff", allowed))
     await call.answer()
 
 
-@router.callback_query(F.data.startswith("admgencodetype:"))
-async def cb_gencode_type(call: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("admgencodetariff:"))
+async def cb_gencode_tariff(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    gtype = call.data.split(":", 1)[1]
-    await state.set_state(GenCode.waiting_amount)
-    await state.update_data(code_type=gtype)
-    await call.message.answer("Kod qancha limit (nechta rasm) qo'shsin?", reply_markup=cancel_kb())
-    await call.answer()
-
-
-async def _finalize_code(message: Message, bot: Bot, gtype: str, amount: int, days: int | None):
-    code = generate_code()
-    store.data["codes"][code] = {
-        "type": gtype,
-        "amount": amount,
-        "days": days,
-        "used": False,
-    }
-    store.schedule_save(bot)
-    if gtype == "daily":
-        info = f"+{amount} limit, kuniga, {days} kun davomida amal qiladi."
-    else:
-        info = f"+{amount} limit, doimiy (bir martalik ishlatiladi)."
-    await message.answer(f"✅ Kod yaratildi:\n\n<code>{code}</code>\n\n{info}")
-
-
-@router.message(GenCode.waiting_amount)
-async def gencode_amount(message: Message, state: FSMContext, bot: Bot):
-    try:
-        amount = int(message.text.strip())
-    except ValueError:
-        return await message.answer("❌ Raqam kiriting.")
-    data = await state.get_data()
-    if data.get("code_type") == "onetime":
-        await state.clear()
-        await _finalize_code(message, bot, "onetime", amount, None)
-        return
-    await state.update_data(amount=amount)
+    tariff = call.data.split(":", 1)[1]
+    if tariff not in allowed_grant_tariffs(call.from_user.id):
+        return await call.answer("Sizga bu tarifni berish huquqi yo'q.", show_alert=True)
     await state.set_state(GenCode.waiting_days)
-    await message.answer("Necha kunga amal qiladi? (kunlarda)")
+    await state.update_data(tariff=tariff)
+    await call.message.answer("Kod necha kunga amal qiladi? (0 = muddatsiz)", reply_markup=cancel_kb())
+    await call.answer()
 
 
 @router.message(GenCode.waiting_days)
@@ -329,10 +302,64 @@ async def gencode_days(message: Message, state: FSMContext, bot: Bot):
     try:
         days = int(message.text.strip())
     except ValueError:
-        return await message.answer("❌ Raqam kiriting.")
+        return await message.answer("❌ Raqam kiriting (0 = muddatsiz).")
     data = await state.get_data()
     await state.clear()
-    await _finalize_code(message, bot, "daily", data["amount"], days)
+    code = generate_code()
+    store.data["codes"][code] = {
+        "tariff": data["tariff"],
+        "days": days if days > 0 else None,
+        "used": False,
+    }
+    store.schedule_save(bot)
+    label = TARIFF_LABELS.get(data["tariff"], data["tariff"])
+    muddat = f"{days} kunga" if days > 0 else "muddatsiz"
+    await message.answer(f"✅ Kod yaratildi:\n\n<code>{code}</code>\n\n{label} tarifi, {muddat}.")
+
+
+# ---------- Tariflar sozlamasi ----------
+
+@router.callback_query(F.data == "admtariffs")
+async def cb_tariffs(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return await call.answer()
+    lines = ["💳 Joriy tariflar:\n"]
+    for name in TARIFF_ORDER:
+        t = store.data.get("tariffs", {}).get(name, {})
+        label = TARIFF_LABELS.get(name, name)
+        lines.append(
+            f"{label}: kuniga {t.get('daily_limit')} ta | {t.get('price_stars')} ⭐ | "
+            f"{t.get('ref_required')} referal | beradi: {t.get('grantable_by')}"
+        )
+    lines.append(
+        "\nO'zgartirish (faqat superadmin):\n"
+        "/settariff [nomi] [maydon] [qiymat]\n"
+        "maydon: daily_limit, price_stars, ref_required\n"
+        "Masalan: /settariff pro daily_limit 6"
+    )
+    await call.message.answer("\n".join(lines))
+    await call.answer()
+
+
+@router.message(Command("settariff"))
+async def cmd_settariff(message: Message, bot: Bot):
+    if not is_superadmin(message.from_user.id):
+        return
+    parts = message.text.split()
+    if len(parts) != 4:
+        return await message.answer("Foydalanish: /settariff [nomi] [maydon] [qiymat]")
+    _, name, field, value = parts
+    if name not in store.data.get("tariffs", {}):
+        return await message.answer(f"❌ Bunday tarif yo'q: {name}")
+    if field not in ("daily_limit", "price_stars", "ref_required"):
+        return await message.answer("❌ maydon: daily_limit, price_stars yoki ref_required bo'lishi kerak.")
+    try:
+        value_int = int(value)
+    except ValueError:
+        return await message.answer("❌ Qiymat raqam bo'lishi kerak.")
+    store.data["tariffs"][name][field] = value_int
+    store.schedule_save(bot)
+    await message.answer(f"✅ {name}.{field} = {value_int}")
 
 
 # ---------- Taqiqlangan so'zlar ----------
@@ -387,9 +414,7 @@ async def cb_emoji(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
     emojis = store.data.get("custom_emojis", {})
-    text = "😀 Custom emoji ro'yxati:\n" + (
-        "\n".join(f"- {k}: {v}" for k, v in emojis.items()) or "—"
-    )
+    text = "😀 Custom emoji ro'yxati:\n" + ("\n".join(f"- {k}: {v}" for k, v in emojis.items()) or "—")
     text += "\n\nQo'shish: /addemoji [kalit] [custom_emoji_id]\nO'chirish: /delemoji [kalit]"
     await call.message.answer(text)
     await call.answer()
@@ -434,8 +459,6 @@ async def delemoji(message: Message, bot: Bot):
 async def cb_edit_emoji(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    emojis = store.data.get("custom_emojis", {})
-    keys = ", ".join(f"{{{k}}}" for k in emojis) or "— (avval /addemoji orqali qo'shing)"
     await state.set_state(EditMessageEmoji.waiting_target)
     await call.message.answer(
         "⚠️ Bot FAQAT o'zi yuborgan xabarlarni tahrirlay oladi (Telegram cheklovi).\n\n"

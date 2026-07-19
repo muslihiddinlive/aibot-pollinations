@@ -28,8 +28,20 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or secrets.token_urlsafe(32)
 # Render "$PORT" environment variable orqali qaysi portni tinglash kerakligini beradi
 PORT = int(os.getenv("PORT", "10000"))
 
-# Har bir userga sutkalik standart limit
-DEFAULT_DAILY_LIMIT = 5
+# Har bir userga sutkalik standart limit (endi tariflar orqali - pastga qarang)
+DEFAULT_DAILY_LIMIT = 2
+
+# Tarif tizimi: kunlik limit, narx (Telegram Stars), qancha referal kerakligi va
+# kim bera olishi. Superadmin bularni /settariff komandasi orqali istagancha
+# o'zgartira oladi (bazadagi nusxasi o'zgaradi, shu yerdagi qiymat - default).
+DEFAULT_TARIFFS = {
+    "free": {"daily_limit": 2, "price_stars": 0, "ref_required": 0, "grantable_by": "auto"},
+    "pro":  {"daily_limit": 5, "price_stars": 15, "ref_required": 5, "grantable_by": "admin"},
+    "plus": {"daily_limit": 10, "price_stars": 25, "ref_required": 15, "grantable_by": "superadmin"},
+    "vip":  {"daily_limit": 20, "price_stars": 50, "ref_required": 0, "grantable_by": "superadmin"},
+}
+TARIFF_ORDER = ["free", "pro", "plus", "vip"]
+TARIFF_LABELS = {"free": "🆓 Free", "pro": "⭐ Pro", "plus": "💎 Plus", "vip": "👑 VIP"}
 
 # Guruhga pin qilinadigan "database" fayl nomi (HTML - ko'rinishi chiroyli,
 # ichida esa qayta tiklash uchun JSON embed qilingan)

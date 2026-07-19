@@ -11,6 +11,7 @@ from config import (
     BOT_TOKEN, WEBHOOK_PATH, WEBHOOK_URL, WEBHOOK_SECRET, WEBHOOK_HOST, PORT,
 )
 from state import store
+from queue_worker import gen_queue
 from handlers import admin, user, reactions
 
 logging.basicConfig(level=logging.INFO)
@@ -33,8 +34,11 @@ async def health(request: web.Request) -> web.Response:
 
 
 async def on_startup(app: web.Application):
-    # Guruhdagi pin qilingan bot_state.json dan holatni tiklaymiz
+    # Guruhdagi pin qilingan bot_state.html dan holatni tiklaymiz
     await store.load(bot)
+
+    # Rasm generatsiya navbatini ishga tushiramiz (bitta worker, ketma-ket bajaradi)
+    gen_queue.start()
 
     if not WEBHOOK_HOST:
         logging.warning(
