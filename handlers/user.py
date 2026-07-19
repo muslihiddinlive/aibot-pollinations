@@ -83,7 +83,8 @@ async def _do_generate(message: Message, bot: Bot, prompt: str):
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, bot: Bot):
+async def cmd_start(message: Message, bot: Bot, state: FSMContext):
+    await state.clear()
     store.get_user(message.from_user.id, message.from_user.username)
     store.schedule_save(bot)
     await message.answer(
@@ -103,24 +104,28 @@ async def cmd_generate(message: Message, command: CommandObject, bot: Bot):
 
 
 @router.message(F.text == "🎨 Rasm yaratish")
-async def btn_generate(message: Message):
+async def btn_generate(message: Message, state: FSMContext):
+    await state.clear()
     await message.answer("Qanday rasm yaratay? Promptni yozib yuboring (masalan: sunset over mountains).")
 
 
 @router.message(F.text == "📊 Limitim")
-async def btn_limit(message: Message):
+async def btn_limit(message: Message, state: FSMContext):
+    await state.clear()
     left = store.remaining_limit(message.from_user.id)
     left_text = "♾ Cheksiz" if left >= 10 ** 9 else str(left)
     await message.answer(f"📊 Sizda bugun {left_text} ta rasm yaratish imkoniyati qoldi.")
 
 
 @router.message(F.text == "🔑 Kod kiritish")
-async def btn_code(message: Message):
+async def btn_code(message: Message, state: FSMContext):
+    await state.clear()
     await message.answer("16 xonali kodni yuboring:")
 
 
 @router.message(F.text == "🏆 Reyting")
-async def btn_rating(message: Message):
+async def btn_rating(message: Message, state: FSMContext):
+    await state.clear()
     top = store.top_users(10)
     if not top:
         await message.answer("Hozircha reyting bo'sh — birinchi bo'lib rasm yarating! 🎨")
