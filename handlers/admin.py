@@ -190,8 +190,8 @@ async def cb_words(call: CallbackQuery):
     text = (
         "🚫 Asosiy ro'yxat: " + ", ".join(BANNED_WORDS) + "\n"
         "➕ Qo'shimcha: " + (", ".join(extra) if extra else "—") + "\n\n"
-        "Qo'shish uchun: /addword <so'z>\n"
-        "O'chirish uchun: /delword <so'z>"
+        "Qo'shish uchun: /addword [so'z]\n"
+        "O'chirish uchun: /delword [so'z]"
     )
     await call.message.answer(text)
     await call.answer()
@@ -203,7 +203,7 @@ async def addword(message: Message, command: Command, bot: Bot):
         return
     word = message.text.partition(" ")[2].strip()
     if not word:
-        return await message.answer("Foydalanish: /addword <so'z>")
+        return await message.answer("Foydalanish: /addword [so'z]")
     store.data.setdefault("banned_words", [])
     if word not in store.data["banned_words"]:
         store.data["banned_words"].append(word)
@@ -234,7 +234,7 @@ async def cb_emoji(call: CallbackQuery, state: FSMContext):
     text = "😀 Custom emoji ro'yxati:\n" + (
         "\n".join(f"- {k}: {v}" for k, v in emojis.items()) or "—"
     )
-    text += "\n\nQo'shish: /addemoji <kalit> <custom_emoji_id>\nO'chirish: /delemoji <kalit>"
+    text += "\n\nQo'shish: /addemoji [kalit] [custom_emoji_id]\nO'chirish: /delemoji [kalit]"
     await call.message.answer(text)
     await call.answer()
 
@@ -245,7 +245,7 @@ async def addemoji(message: Message, bot: Bot):
         return
     parts = message.text.split(maxsplit=2)
     if len(parts) < 3:
-        return await message.answer("Foydalanish: /addemoji <kalit> <custom_emoji_id>")
+        return await message.answer("Foydalanish: /addemoji [kalit] [custom_emoji_id]")
     key, emoji_id = parts[1], parts[2]
     store.data.setdefault("custom_emojis", {})[key] = emoji_id
     await store.save(bot)
@@ -282,9 +282,9 @@ async def cb_reactions(call: CallbackQuery):
     admins = store.data.get("reaction_admins", [])
     text = (
         "⭐️ Premium reaksiya bosiladigan adminlar: " + (", ".join(map(str, admins)) or "—") + "\n\n"
-        "Qo'shish: /addreactionadmin <user_id>\n"
-        "O'chirish: /delreactionadmin <user_id>\n"
-        "Reaksiya emoji ID: /setreactionemoji <custom_emoji_id>"
+        "Qo'shish: /addreactionadmin [user_id]\n"
+        "O'chirish: /delreactionadmin [user_id]\n"
+        "Reaksiya emoji ID: /setreactionemoji [custom_emoji_id]"
     )
     await call.message.answer(text)
     await call.answer()
@@ -297,7 +297,7 @@ async def add_reaction_admin(message: Message, bot: Bot):
     try:
         uid = int(message.text.partition(" ")[2].strip())
     except ValueError:
-        return await message.answer("Foydalanish: /addreactionadmin <user_id>")
+        return await message.answer("Foydalanish: /addreactionadmin [user_id]")
     lst = store.data.setdefault("reaction_admins", [])
     if uid not in lst:
         lst.append(uid)
@@ -312,7 +312,7 @@ async def del_reaction_admin(message: Message, bot: Bot):
     try:
         uid = int(message.text.partition(" ")[2].strip())
     except ValueError:
-        return await message.answer("Foydalanish: /delreactionadmin <user_id>")
+        return await message.answer("Foydalanish: /delreactionadmin [user_id]")
     lst = store.data.setdefault("reaction_admins", [])
     if uid in lst:
         lst.remove(uid)
@@ -328,7 +328,7 @@ async def set_reaction_emoji(message: Message, bot: Bot):
         return
     emoji_id = message.text.partition(" ")[2].strip()
     if not emoji_id:
-        return await message.answer("Foydalanish: /setreactionemoji <custom_emoji_id>")
+        return await message.answer("Foydalanish: /setreactionemoji [custom_emoji_id]")
     store.data["reaction_emoji_id"] = emoji_id
     await store.save(bot)
     await message.answer("✅ Reaksiya emoji o'rnatildi.")
@@ -343,7 +343,7 @@ async def add_admin(message: Message, bot: Bot):
     try:
         uid = int(message.text.partition(" ")[2].strip())
     except ValueError:
-        return await message.answer("Foydalanish: /addadmin <user_id>")
+        return await message.answer("Foydalanish: /addadmin [user_id]")
     lst = store.data.setdefault("admins", [])
     if uid not in lst:
         lst.append(uid)
@@ -358,7 +358,7 @@ async def del_admin(message: Message, bot: Bot):
     try:
         uid = int(message.text.partition(" ")[2].strip())
     except ValueError:
-        return await message.answer("Foydalanish: /deladmin <user_id>")
+        return await message.answer("Foydalanish: /deladmin [user_id]")
     lst = store.data.setdefault("admins", [])
     if uid in lst:
         lst.remove(uid)

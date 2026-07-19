@@ -77,7 +77,7 @@ async def cmd_start(message: Message, bot: Bot):
     await store.save(bot)
     await message.answer(
         "👋 Xush kelibsiz!\n\n"
-        "🎨 Rasm yaratish uchun: /generate <prompt> yoki pastdagi tugmadan foydalaning.\n"
+        "🎨 Rasm yaratish uchun: /generate [prompt] yoki pastdagi tugmadan foydalaning.\n"
         f"Har kuni bepul limitingiz bor.",
         reply_markup=main_menu(),
     )
@@ -86,7 +86,7 @@ async def cmd_start(message: Message, bot: Bot):
 @router.message(Command("generate"))
 async def cmd_generate(message: Message, command: CommandObject, bot: Bot):
     if not command.args:
-        await message.answer("Foydalanish: /generate <prompt>\nMasalan: /generate a cat astronaut in space")
+        await message.answer("Foydalanish: /generate [prompt]\nMasalan: /generate a cat astronaut in space")
         return
     await _do_generate(message, bot, command.args)
 
