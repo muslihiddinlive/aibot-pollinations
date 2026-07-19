@@ -4,15 +4,15 @@ from aiogram.types import (
 )
 
 
-def main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎨 Rasm yaratish"), KeyboardButton(text="📊 Limitim")],
-            [KeyboardButton(text="🔑 Kod kiritish"), KeyboardButton(text="🏆 Reyting")],
-            [KeyboardButton(text="💳 Tarif sotib olish"), KeyboardButton(text="✉️ Adminga murojaat")],
-        ],
-        resize_keyboard=True,
-    )
+def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(text="🎨 Rasm yaratish"), KeyboardButton(text="📊 Limitim")],
+        [KeyboardButton(text="🔑 Kod kiritish"), KeyboardButton(text="🏆 Reyting")],
+        [KeyboardButton(text="💳 Tarif sotib olish"), KeyboardButton(text="✉️ Adminga murojaat")],
+    ]
+    if is_admin:
+        keyboard.append([KeyboardButton(text="🛠 Admin panel")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 def admin_panel() -> InlineKeyboardMarkup:

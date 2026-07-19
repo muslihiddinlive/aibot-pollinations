@@ -43,7 +43,9 @@ async def cmd_myid(message: Message):
 
 
 @router.message(Command("admin"))
-async def cmd_admin(message: Message):
+@router.message(F.text == "🛠 Admin panel")
+async def cmd_admin(message: Message, state: FSMContext):
+    await state.clear()
     if not is_admin(message.from_user.id):
         await message.answer(
             "🚫 Sizda admin panelga ruxsat yo'q.\n"

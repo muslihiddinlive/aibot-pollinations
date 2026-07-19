@@ -91,7 +91,7 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext):
         "👋 Xush kelibsiz!\n\n"
         "🎨 Rasm yaratish uchun: /generate [prompt] yoki pastdagi tugmadan foydalaning.\n"
         f"Har kuni bepul limitingiz bor.",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(store.is_admin_user(message.from_user.id)),
     )
 
 
