@@ -33,9 +33,23 @@ def _fmt_limit(uid: int) -> str:
     return "♾ Cheksiz" if left >= UNLIMITED else str(left)
 
 
+@router.message(Command("myid"))
+async def cmd_myid(message: Message):
+    await message.answer(
+        f"🆔 Sizning Telegram ID'ingiz: <code>{message.from_user.id}</code>\n\n"
+        f"Superadmin bo'lish uchun shu raqamni Render'dagi <code>SUPERADMIN_ID</code> "
+        f"environment variable'iga qo'yib, xizmatni qayta deploy qiling."
+    )
+
+
 @router.message(Command("admin"))
 async def cmd_admin(message: Message):
     if not is_admin(message.from_user.id):
+        await message.answer(
+            "🚫 Sizda admin panelga ruxsat yo'q.\n"
+            f"Sizning ID: <code>{message.from_user.id}</code>\n"
+            "Bu ID Render'dagi SUPERADMIN_ID bilan (yoki /addadmin orqali qo'shilgan adminlar ro'yxati bilan) mos kelmayapti."
+        )
         return
     await message.answer("🛠 Admin panel:", reply_markup=admin_panel())
 
