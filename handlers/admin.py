@@ -1,6 +1,5 @@
 from aiogram import Router, F, Bot
-from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, MessageEntity
+from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from config import SUPERADMIN_ID, TARIFF_ORDER, TARIFF_LABELS
@@ -8,13 +7,13 @@ from state import store, UNLIMITED
 from codes import generate_code
 from keyboards import (
     admin_panel, cancel_kb, users_list_kb, user_detail_kb,
-    tariff_choice_kb, manage_admins_kb,
+    tariff_choice_kb, manage_admins_kb, words_kb, tariffs_kb,
+    tariff_field_kb, channels_kb,
 )
 from states import (
-    GenCode, TariffGrant, Broadcast, WordsManage, EmojiManage,
-    SendToUser, EditMessageEmoji,
+    GenCode, TariffGrant, TariffEdit, Broadcast, WordsManage,
+    SendToUser, AdminAdd, ChannelSetup,
 )
-from emoji_utils import build_emoji_entities
 
 router = Router()
 
@@ -24,50 +23,22 @@ def is_admin(user_id: int) -> bool:
 
 
 def is_superadmin(user_id: int) -> bool:
-    """Faqat asosiy egasi - adminlarni tayinlash/olib tashlash shu darajaga tegishli."""
+    """Faqat asosiy egasi - adminlarni tayinlash/olib tashlash va kanal sozlamalari shu darajaga tegishli."""
     return user_id == SUPERADMIN_ID
 
 
 def allowed_grant_tariffs(caller_id: int) -> list[str]:
-    """Shu admin/superadmin kimga qaysi tariflarni bera olishini qaytaradi."""
     if is_superadmin(caller_id):
-        return TARIFF_ORDER  # hammasi, shu jumladan "free" ga qaytarish
+        return TARIFF_ORDER
     if is_admin(caller_id):
-        allowed = []
-        for name in TARIFF_ORDER:
-            gb = store.data.get("tariffs", {}).get(name, {}).get("grantable_by")
-            if gb == "admin":
-                allowed.append(name)
-        return allowed
+        return [name for name in TARIFF_ORDER
+                if store.data.get("tariffs", {}).get(name, {}).get("grantable_by") == "admin"]
     return []
 
 
 def _fmt_limit(uid: int) -> str:
     left = store.remaining_limit(uid)
     return "♾ Cheksiz" if left >= UNLIMITED else str(left)
-
-
-@router.message(Command("myid"))
-async def cmd_myid(message: Message):
-    await message.answer(
-        f"🆔 Sizning Telegram ID'ingiz: <code>{message.from_user.id}</code>\n\n"
-        f"Superadmin bo'lish uchun shu raqamni Render'dagi <code>SUPERADMIN_ID</code> "
-        f"environment variable'iga qo'yib, xizmatni qayta deploy qiling."
-    )
-
-
-@router.message(Command("admin"))
-@router.message(F.text == "🛠 Admin panel")
-async def cmd_admin(message: Message, state: FSMContext):
-    await state.clear()
-    if not is_admin(message.from_user.id):
-        await message.answer(
-            "🚫 Sizda admin panelga ruxsat yo'q.\n"
-            f"Sizning ID: <code>{message.from_user.id}</code>\n"
-            "Bu ID Render'dagi SUPERADMIN_ID bilan (yoki /addadmin orqali qo'shilgan adminlar ro'yxati bilan) mos kelmayapti."
-        )
-        return
-    await message.answer("🛠 Admin panel:", reply_markup=admin_panel())
 
 
 @router.callback_query(F.data == "admcancel")
@@ -115,10 +86,7 @@ async def _render_user_detail(call: CallbackQuery, uid: str):
     left = _fmt_limit(int(uid))
     tariff = u.get("tariff", "free")
     tariff_text = TARIFF_LABELS.get(tariff, tariff)
-    if u.get("tariff_until"):
-        tariff_text += f" ({u['tariff_until']} gacha)"
-    else:
-        tariff_text += " (doimiy)"
+    tariff_text += f" ({u['tariff_until']} gacha)" if u.get("tariff_until") else " (doimiy)"
     ban_text = "ha" if u.get("banned") else "yo'q"
     text = (
         f"👤 <b>{u.get('username') or '—'}</b>\n"
@@ -126,6 +94,7 @@ async def _render_user_detail(call: CallbackQuery, uid: str):
         f"📅 Qo'shilgan: {u.get('first_seen', '—')}\n"
         f"🖼 Yaratgan rasmlar: {u.get('images_generated', 0)}\n"
         f"💳 Tarif: {tariff_text}\n"
+        f"🎁 Bonus: {u.get('bonus_limit', 0)}\n"
         f"⏳ Hozir qolgan limit: {left}\n"
         f"🔗 Referallari: {u.get('ref_count', 0)} ta\n"
         f"🚫 Ban: {ban_text}"
@@ -306,260 +275,176 @@ async def gencode_days(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     await state.clear()
     code = generate_code()
-    store.data["codes"][code] = {
-        "tariff": data["tariff"],
-        "days": days if days > 0 else None,
-        "used": False,
-    }
+    store.data["codes"][code] = {"tariff": data["tariff"], "days": days if days > 0 else None, "used": False}
     store.schedule_save(bot)
     label = TARIFF_LABELS.get(data["tariff"], data["tariff"])
     muddat = f"{days} kunga" if days > 0 else "muddatsiz"
     await message.answer(f"✅ Kod yaratildi:\n\n<code>{code}</code>\n\n{label} tarifi, {muddat}.")
 
 
-# ---------- Tariflar sozlamasi ----------
+# ---------- Tariflar sozlamasi (to'liq inline tahrirlash) ----------
 
 @router.callback_query(F.data == "admtariffs")
 async def cb_tariffs(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    lines = ["💳 Joriy tariflar:\n"]
-    for name in TARIFF_ORDER:
-        t = store.data.get("tariffs", {}).get(name, {})
-        label = TARIFF_LABELS.get(name, name)
-        lines.append(
-            f"{label}: kuniga {t.get('daily_limit')} ta | {t.get('price_stars')} ⭐ | "
-            f"{t.get('ref_required')} referal | beradi: {t.get('grantable_by')}"
-        )
-    lines.append(
-        "\nO'zgartirish (faqat superadmin):\n"
-        "/settariff [nomi] [maydon] [qiymat]\n"
-        "maydon: daily_limit, price_stars, ref_required\n"
-        "Masalan: /settariff pro daily_limit 6"
-    )
-    await call.message.answer("\n".join(lines))
+    await call.message.edit_text("💳 Tariflar (tahrirlash uchun bosing):", reply_markup=tariffs_kb(store.data["tariffs"]))
     await call.answer()
 
 
-@router.message(Command("settariff"))
-async def cmd_settariff(message: Message, bot: Bot):
-    if not is_superadmin(message.from_user.id):
-        return
-    parts = message.text.split()
-    if len(parts) != 4:
-        return await message.answer("Foydalanish: /settariff [nomi] [maydon] [qiymat]")
-    _, name, field, value = parts
-    if name not in store.data.get("tariffs", {}):
-        return await message.answer(f"❌ Bunday tarif yo'q: {name}")
-    if field not in ("daily_limit", "price_stars", "ref_required"):
-        return await message.answer("❌ maydon: daily_limit, price_stars yoki ref_required bo'lishi kerak.")
+@router.callback_query(F.data.startswith("tariffedit:"))
+async def cb_tariff_edit(call: CallbackQuery):
+    if not is_superadmin(call.from_user.id):
+        return await call.answer("Faqat superadmin tarif sozlamalarini o'zgartira oladi.", show_alert=True)
+    name = call.data.split(":", 1)[1]
+    label = TARIFF_LABELS.get(name, name)
+    await call.message.edit_text(f"{label} - qaysi qiymatni o'zgartiramiz?", reply_markup=tariff_field_kb(name))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("tariffeditfield:"))
+async def cb_tariff_edit_field(call: CallbackQuery, state: FSMContext):
+    if not is_superadmin(call.from_user.id):
+        return await call.answer("Faqat superadmin.", show_alert=True)
+    _, name, field = call.data.split(":", 2)
+    await state.set_state(TariffEdit.waiting_value)
+    await state.update_data(tariff=name, field=field)
+    field_names = {"daily_limit": "kunlik limit", "price_stars": "narx (stars)", "ref_required": "referal talabi"}
+    await call.message.answer(f"Yangi qiymat ({field_names.get(field, field)}):", reply_markup=cancel_kb())
+    await call.answer()
+
+
+@router.message(TariffEdit.waiting_value)
+async def tariff_edit_value(message: Message, state: FSMContext, bot: Bot):
     try:
-        value_int = int(value)
+        value = int(message.text.strip())
     except ValueError:
-        return await message.answer("❌ Qiymat raqam bo'lishi kerak.")
-    store.data["tariffs"][name][field] = value_int
+        return await message.answer("❌ Raqam kiriting.")
+    data = await state.get_data()
+    await state.clear()
+    store.data["tariffs"][data["tariff"]][data["field"]] = value
     store.schedule_save(bot)
-    await message.answer(f"✅ {name}.{field} = {value_int}")
+    await message.answer(f"✅ {data['tariff']}.{data['field']} = {value}", reply_markup=tariffs_kb(store.data["tariffs"]))
 
 
-# ---------- Taqiqlangan so'zlar ----------
+# ---------- Taqiqlangan so'zlar (to'liq inline) ----------
 
 @router.callback_query(F.data == "admwords")
 async def cb_words(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    from config import BANNED_WORDS
-    extra = store.data.get("banned_words", [])
-    text = (
-        "🚫 Asosiy ro'yxat: " + ", ".join(BANNED_WORDS) + "\n"
-        "➕ Qo'shimcha: " + (", ".join(extra) if extra else "—") + "\n\n"
-        "Qo'shish uchun: /addword [so'z]\n"
-        "O'chirish uchun: /delword [so'z]"
+    words = store.data.get("banned_words", [])
+    await call.message.edit_text(
+        f"🚫 Taqiqlangan so'zlar ({len(words)} ta). O'chirish uchun bosing:",
+        reply_markup=words_kb(words),
     )
-    await call.message.answer(text)
     await call.answer()
 
 
-@router.message(Command("addword"))
-async def addword(message: Message, bot: Bot):
-    if not is_admin(message.from_user.id):
-        return
-    word = message.text.partition(" ")[2].strip()
-    if not word:
-        return await message.answer("Foydalanish: /addword [so'z]")
-    store.data.setdefault("banned_words", [])
-    if word not in store.data["banned_words"]:
-        store.data["banned_words"].append(word)
-        store.schedule_save(bot)
-    await message.answer(f"✅ Qo'shildi: {word}")
-
-
-@router.message(Command("delword"))
-async def delword(message: Message, bot: Bot):
-    if not is_admin(message.from_user.id):
-        return
-    word = message.text.partition(" ")[2].strip()
-    if word in store.data.get("banned_words", []):
-        store.data["banned_words"].remove(word)
-        store.schedule_save(bot)
-        await message.answer(f"✅ O'chirildi: {word}")
-    else:
-        await message.answer("Bu so'z qo'shimcha ro'yxatda topilmadi (asosiy ro'yxatdagi so'zlar o'chirilmaydi).")
-
-
-# ---------- Custom (premium) emoji ----------
-
-@router.callback_query(F.data == "admemoji")
-async def cb_emoji(call: CallbackQuery):
+@router.callback_query(F.data == "wordadd")
+async def cb_word_add(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    emojis = store.data.get("custom_emojis", {})
-    text = "😀 Custom emoji ro'yxati:\n" + ("\n".join(f"- {k}: {v}" for k, v in emojis.items()) or "—")
-    text += "\n\nQo'shish: /addemoji [kalit] [custom_emoji_id]\nO'chirish: /delemoji [kalit]"
-    await call.message.answer(text)
+    await state.set_state(WordsManage.waiting_add)
+    await call.message.answer("Qo'shiladigan so'zni yuboring:", reply_markup=cancel_kb())
     await call.answer()
 
 
-@router.message(Command("addemoji"))
-async def addemoji(message: Message, bot: Bot):
-    if not is_admin(message.from_user.id):
-        return
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        return await message.answer("Foydalanish: /addemoji [kalit] [custom_emoji_id]")
-    key, emoji_id = parts[1], parts[2]
-    store.data.setdefault("custom_emojis", {})[key] = emoji_id
-    store.schedule_save(bot)
-    try:
-        await message.answer(
-            "🙂",
-            entities=[MessageEntity(type="custom_emoji", offset=0, length=2, custom_emoji_id=emoji_id)],
-        )
-    except Exception:
-        pass
-    await message.answer(f"✅ Qo'shildi: {key} -> {emoji_id}")
-
-
-@router.message(Command("delemoji"))
-async def delemoji(message: Message, bot: Bot):
-    if not is_admin(message.from_user.id):
-        return
-    key = message.text.partition(" ")[2].strip()
-    if key in store.data.get("custom_emojis", {}):
-        del store.data["custom_emojis"][key]
+@router.message(WordsManage.waiting_add)
+async def word_add_value(message: Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    if store.add_banned_word(message.text):
         store.schedule_save(bot)
-        await message.answer(f"✅ O'chirildi: {key}")
+        await message.answer(f"✅ Qo'shildi: {message.text.strip()}")
     else:
-        await message.answer("Topilmadi.")
+        await message.answer("Bu so'z allaqachon ro'yxatda bor yoki bo'sh.")
+    words = store.data.get("banned_words", [])
+    await message.answer(f"🚫 Taqiqlangan so'zlar ({len(words)} ta):", reply_markup=words_kb(words))
 
 
-# ---------- Istalgan (bot yuborgan) xabarni premium emoji bilan tahrirlash ----------
-
-@router.callback_query(F.data == "admeditemoji")
-async def cb_edit_emoji(call: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("worddel:"))
+async def cb_word_del(call: CallbackQuery, bot: Bot):
     if not is_admin(call.from_user.id):
         return await call.answer()
-    await state.set_state(EditMessageEmoji.waiting_target)
+    index = int(call.data.split(":", 1)[1])
+    removed = store.remove_banned_word_at(index)
+    if removed:
+        store.schedule_save(bot)
+    words = store.data.get("banned_words", [])
+    await call.message.edit_text(f"🚫 Taqiqlangan so'zlar ({len(words)} ta):", reply_markup=words_kb(words))
+    await call.answer("✅ O'chirildi." if removed else "Topilmadi.")
+
+
+# ---------- Kanal sozlamalari (faqat superadmin) ----------
+
+@router.callback_query(F.data == "admchannels")
+async def cb_channels(call: CallbackQuery):
+    if not is_superadmin(call.from_user.id):
+        return await call.answer("Faqat superadmin uchun.", show_alert=True)
+    d = store.data
+    mandatory_text = f"@{d['mandatory_channel']}" if d.get("mandatory_channel") else "— (o'chirilgan)"
+    bonus_text = f"@{d['bonus_channel']}" if d.get("bonus_channel") else "— (o'chirilgan)"
+    text = (
+        "📡 Kanal sozlamalari:\n\n"
+        f"📢 Majburiy kanal: {mandatory_text}\n"
+        f"🎁 Bonus kanal: {bonus_text}\n\n"
+        "Majburiy kanalga a'zo bo'lmagan userlar rasm yarata olmaydi.\n"
+        "Bonus kanalga a'zo bo'lgan har bir user bir martalik +2 doimiy limit oladi.\n\n"
+        "⚠️ Bot shu kanallarda ADMIN bo'lishi shart (a'zolikni tekshirish uchun)."
+    )
+    await call.message.edit_text(text, reply_markup=channels_kb(d.get("mandatory_channel"), d.get("bonus_channel")))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("chanset:"))
+async def cb_chan_set(call: CallbackQuery, state: FSMContext):
+    if not is_superadmin(call.from_user.id):
+        return await call.answer("Faqat superadmin uchun.", show_alert=True)
+    kind = call.data.split(":", 1)[1]
+    if kind == "mandatory":
+        await state.set_state(ChannelSetup.waiting_mandatory)
+    else:
+        await state.set_state(ChannelSetup.waiting_bonus)
     await call.message.answer(
-        "⚠️ Bot FAQAT o'zi yuborgan xabarlarni tahrirlay oladi (Telegram cheklovi).\n\n"
-        "Tahrirlanadigan xabarni <code>chat_id:message_id</code> ko'rinishida yuboring "
-        "(masalan: <code>-1001234567890:456</code>).",
+        "Kanal username'ini yuboring (masalan: @mychannel).\n"
+        "⚠️ Kanal PUBLIC bo'lishi va bot unda ADMIN bo'lishi shart.",
         reply_markup=cancel_kb(),
     )
     await call.answer()
 
 
-@router.message(EditMessageEmoji.waiting_target)
-async def edit_emoji_target(message: Message, state: FSMContext):
-    try:
-        chat_id_s, msg_id_s = message.text.strip().split(":")
-        chat_id, msg_id = int(chat_id_s), int(msg_id_s)
-    except Exception:
-        return await message.answer("❌ Format: chat_id:message_id")
-    await state.update_data(chat_id=chat_id, message_id=msg_id)
-    emojis = store.data.get("custom_emojis", {})
-    keys = ", ".join(f"{{{k}}}" for k in emojis) or "—"
-    await state.set_state(EditMessageEmoji.waiting_text)
-    await message.answer(
-        f"Yangi matnni yuboring. Emoji qo'yish uchun kalitlarni {{qavs}} ichida yozing.\n"
-        f"Mavjud kalitlar: {keys}"
-    )
-
-
-@router.message(EditMessageEmoji.waiting_text)
-async def edit_emoji_text(message: Message, state: FSMContext, bot: Bot):
-    data = await state.get_data()
+@router.message(ChannelSetup.waiting_mandatory)
+async def chan_set_mandatory(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
-    text, entities = build_emoji_entities(message.text, store.data.get("custom_emojis", {}))
-    try:
-        await bot.edit_message_text(
-            chat_id=data["chat_id"], message_id=data["message_id"],
-            text=text, entities=entities or None,
-        )
-        await message.answer("✅ Xabar tahrirlandi.")
-    except Exception as e:
-        await message.answer(f"❌ Tahrirlab bo'lmadi (bot shu xabarni yuborgan bo'lishi kerak): {e}")
-
-
-# ---------- Premium reaksiya adminlari ----------
-
-@router.callback_query(F.data == "admreactions")
-async def cb_reactions(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return await call.answer()
-    admins = store.data.get("reaction_admins", [])
-    text = (
-        "⭐️ Premium reaksiya bosiladigan adminlar: " + (", ".join(map(str, admins)) or "—") + "\n\n"
-        "Qo'shish: /addreactionadmin [user_id]\n"
-        "O'chirish: /delreactionadmin [user_id]\n"
-        "Reaksiya emoji ID: /setreactionemoji [custom_emoji_id]"
-    )
-    await call.message.answer(text)
-    await call.answer()
-
-
-@router.message(Command("addreactionadmin"))
-async def add_reaction_admin(message: Message, bot: Bot):
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        uid = int(message.text.partition(" ")[2].strip())
-    except ValueError:
-        return await message.answer("Foydalanish: /addreactionadmin [user_id]")
-    lst = store.data.setdefault("reaction_admins", [])
-    if uid not in lst:
-        lst.append(uid)
-        store.schedule_save(bot)
-    await message.answer(f"✅ Qo'shildi: {uid}")
-
-
-@router.message(Command("delreactionadmin"))
-async def del_reaction_admin(message: Message, bot: Bot):
-    if not is_admin(message.from_user.id):
-        return
-    try:
-        uid = int(message.text.partition(" ")[2].strip())
-    except ValueError:
-        return await message.answer("Foydalanish: /delreactionadmin [user_id]")
-    lst = store.data.setdefault("reaction_admins", [])
-    if uid in lst:
-        lst.remove(uid)
-        store.schedule_save(bot)
-        await message.answer(f"✅ O'chirildi: {uid}")
-    else:
-        await message.answer("Topilmadi.")
-
-
-@router.message(Command("setreactionemoji"))
-async def set_reaction_emoji(message: Message, bot: Bot):
-    if not is_admin(message.from_user.id):
-        return
-    emoji_id = message.text.partition(" ")[2].strip()
-    if not emoji_id:
-        return await message.answer("Foydalanish: /setreactionemoji [custom_emoji_id]")
-    store.data["reaction_emoji_id"] = emoji_id
+    store.set_mandatory_channel(message.text)
     store.schedule_save(bot)
-    await message.answer("✅ Reaksiya emoji o'rnatildi.")
+    await message.answer(f"✅ Majburiy kanal o'rnatildi: @{store.data['mandatory_channel']}")
+
+
+@router.message(ChannelSetup.waiting_bonus)
+async def chan_set_bonus(message: Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    store.set_bonus_channel(message.text)
+    store.schedule_save(bot)
+    await message.answer(f"✅ Bonus kanal o'rnatildi: @{store.data['bonus_channel']}")
+
+
+@router.callback_query(F.data.startswith("chanclear:"))
+async def cb_chan_clear(call: CallbackQuery, bot: Bot):
+    if not is_superadmin(call.from_user.id):
+        return await call.answer("Faqat superadmin uchun.", show_alert=True)
+    kind = call.data.split(":", 1)[1]
+    if kind == "mandatory":
+        store.clear_mandatory_channel()
+    else:
+        store.clear_bonus_channel()
+    store.schedule_save(bot)
+    d = store.data
+    await call.message.edit_text(
+        "📡 Kanal sozlamalari yangilandi.",
+        reply_markup=channels_kb(d.get("mandatory_channel"), d.get("bonus_channel")),
+    )
+    await call.answer("✅ O'chirildi.")
 
 
 # ---------- Adminlarni boshqarish (faqat superadmin) ----------
@@ -569,9 +454,32 @@ async def cb_manage_admins(call: CallbackQuery):
     if not is_superadmin(call.from_user.id):
         return await call.answer("Faqat superadmin uchun.", show_alert=True)
     admins = store.data.get("admins", [])
-    text = "🛠 Adminlar ro'yxati (bosilsa o'chiriladi):\n\nYangi qo'shish: /addadmin [user_id]"
-    await call.message.edit_text(text, reply_markup=manage_admins_kb(admins))
+    await call.message.edit_text("🛠 Adminlar ro'yxati (bosilsa o'chiriladi):", reply_markup=manage_admins_kb(admins))
     await call.answer()
+
+
+@router.callback_query(F.data == "admaddadmin")
+async def cb_add_admin_open(call: CallbackQuery, state: FSMContext):
+    if not is_superadmin(call.from_user.id):
+        return await call.answer("Faqat superadmin uchun.", show_alert=True)
+    await state.set_state(AdminAdd.waiting_id)
+    await call.message.answer("Yangi admin ID raqamini yuboring:", reply_markup=cancel_kb())
+    await call.answer()
+
+
+@router.message(AdminAdd.waiting_id)
+async def add_admin_value(message: Message, state: FSMContext, bot: Bot):
+    await state.clear()
+    try:
+        uid = int(message.text.strip())
+    except ValueError:
+        return await message.answer("❌ Raqam kiriting.")
+    lst = store.data.setdefault("admins", [])
+    if uid not in lst:
+        lst.append(uid)
+        store.schedule_save(bot)
+    await message.answer(f"✅ Admin qo'shildi: {uid}. U endi superadmin qila oladigan hamma ishni qila oladi.")
+    await message.answer("🛠 Adminlar ro'yxati:", reply_markup=manage_admins_kb(lst))
 
 
 @router.callback_query(F.data.startswith("admdeladmin:"))
@@ -584,38 +492,6 @@ async def cb_del_admin_btn(call: CallbackQuery, bot: Bot):
         lst.remove(uid)
         store.schedule_save(bot)
     await cb_manage_admins(call)
-
-
-@router.message(Command("addadmin"))
-async def add_admin(message: Message, bot: Bot):
-    if not is_superadmin(message.from_user.id):
-        return
-    try:
-        uid = int(message.text.partition(" ")[2].strip())
-    except ValueError:
-        return await message.answer("Foydalanish: /addadmin [user_id]")
-    lst = store.data.setdefault("admins", [])
-    if uid not in lst:
-        lst.append(uid)
-        store.schedule_save(bot)
-    await message.answer(f"✅ Admin qo'shildi: {uid}. U endi superadmin qila oladigan hamma ishni qila oladi.")
-
-
-@router.message(Command("deladmin"))
-async def del_admin(message: Message, bot: Bot):
-    if not is_superadmin(message.from_user.id):
-        return
-    try:
-        uid = int(message.text.partition(" ")[2].strip())
-    except ValueError:
-        return await message.answer("Foydalanish: /deladmin [user_id]")
-    lst = store.data.setdefault("admins", [])
-    if uid in lst:
-        lst.remove(uid)
-        store.schedule_save(bot)
-        await message.answer(f"✅ Admin o'chirildi: {uid}")
-    else:
-        await message.answer("Topilmadi.")
 
 
 # ---------- Admin/superadmin DB ga rasm tashlaydi -> keshlanadi ----------

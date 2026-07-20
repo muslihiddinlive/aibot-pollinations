@@ -1,6 +1,6 @@
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, BufferedInputFile, CallbackQuery
+from aiogram.types import Message, BufferedInputFile, CallbackQuery, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 
 from config import DB_GROUP_ID, SUPERADMIN_ID, TARIFF_LABELS, TARIFF_ORDER
@@ -8,7 +8,10 @@ from state import store, UNLIMITED
 from moderation import contains_banned
 from pollinations import generate_image
 from codes import redeem
-from keyboards import main_menu, tariff_purchase_kb
+from keyboards import (
+    main_menu, tariff_purchase_kb, admin_start_menu, admin_panel,
+    mandatory_gate_kb, bonus_gate_kb,
+)
 from states import RequestTariff, UserContact
 from queue_worker import gen_queue
 
@@ -27,6 +30,32 @@ async def _get_bot_username(bot: Bot) -> str:
 def _left_text(user_id: int) -> str:
     left = store.remaining_limit(user_id)
     return "♾ Cheksiz" if left >= UNLIMITED else str(left)
+
+
+async def _is_channel_member(bot: Bot, username: str, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(f"@{username}", user_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        print(f"[channel] a'zolikni tekshirishda xato (@{username}, {user_id}): {e}")
+        return False
+
+
+async def _check_mandatory(message: Message, bot: Bot) -> bool:
+    """True qaytsa - davom etsa bo'ladi. False bo'lsa, allaqachon foydalanuvchiga xabar yuborilgan."""
+    mandatory = store.data.get("mandatory_channel")
+    if not mandatory:
+        return True
+    if store.is_admin_user(message.from_user.id):
+        return True
+    if await _is_channel_member(bot, mandatory, message.from_user.id):
+        return True
+    await message.answer(
+        f"📢 Botdan foydalanish uchun avval kanalga a'zo bo'ling:\n@{mandatory}\n\n"
+        f"A'zo bo'lgach, tugmani bosing:",
+        reply_markup=mandatory_gate_kb(mandatory),
+    )
+    return False
 
 
 async def _generate_job(message: Message, bot: Bot, prompt: str, user_id: int, status: Message):
@@ -83,6 +112,9 @@ async def _do_generate(message: Message, bot: Bot, prompt: str):
         await message.answer("🚫 Siz botdan foydalanishdan taqiqlangansiz.")
         return
 
+    if not await _check_mandatory(message, bot):
+        return
+
     remaining = store.remaining_limit(user.id)
     if remaining <= 0:
         await message.answer(
@@ -102,8 +134,6 @@ async def _do_generate(message: Message, bot: Bot, prompt: str):
         )
         return
 
-    # navbat: bir vaqtda ko'p kishi so'rasa ham hech kim xato olmaydi,
-    # bittadan ketma-ket bajariladi
     position = gen_queue.peek_position()
     if position > 0:
         status = await message.answer(f"⏳ Navbatga qo'shildingiz. Sizdan oldin {position} ta so'rov bor.")
@@ -139,20 +169,19 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext, command: Comm
             pass
 
     store.schedule_save(bot)
+
+    if store.is_admin_user(message.from_user.id):
+        await message.answer("👋 Xush kelibsiz, Admin!", reply_markup=ReplyKeyboardRemove())
+        await message.answer("📋 Barcha funksiyalar:", reply_markup=admin_start_menu())
+        return
+
+    bonus_available = bool(store.data.get("bonus_channel")) and not store.get_user(message.from_user.id).get("bonus_claimed")
     await message.answer(
         "👋 Xush kelibsiz!\n\n"
-        "🎨 Rasm yaratish uchun: /generate [prompt] yoki pastdagi tugmadan foydalaning.\n"
+        "🎨 Rasm yaratish uchun pastdagi tugmadan foydalaning yoki to'g'ridan-to'g'ri prompt yozing.\n"
         "Har kuni bepul limitingiz bor.",
-        reply_markup=main_menu(store.is_admin_user(message.from_user.id)),
+        reply_markup=main_menu(bonus_available),
     )
-
-
-@router.message(Command("generate"))
-async def cmd_generate(message: Message, command: CommandObject, bot: Bot):
-    if not command.args:
-        await message.answer("Foydalanish: /generate [prompt]\nMasalan: /generate a cat astronaut in space")
-        return
-    await _do_generate(message, bot, command.args)
 
 
 @router.message(F.text == "🎨 Rasm yaratish")
@@ -207,6 +236,55 @@ async def btn_referral(message: Message, state: FSMContext, bot: Bot):
     )
 
 
+@router.message(F.text == "🎁 Bonus olish")
+async def btn_bonus(message: Message, state: FSMContext):
+    await state.clear()
+    bonus = store.data.get("bonus_channel")
+    if not bonus:
+        await message.answer("Hozircha bonus kanal o'rnatilmagan.")
+        return
+    u = store.get_user(message.from_user.id, message.from_user.username)
+    if u.get("bonus_claimed"):
+        await message.answer("✅ Siz bonusni allaqachon olgansiz.")
+        return
+    await message.answer(
+        f"🎁 Kanalga a'zo bo'lsangiz +2 ta doimiy limit olasiz:\n@{bonus}",
+        reply_markup=bonus_gate_kb(bonus),
+    )
+
+
+@router.callback_query(F.data == "checkbonus")
+async def cb_check_bonus(call: CallbackQuery, bot: Bot):
+    bonus = store.data.get("bonus_channel")
+    if not bonus:
+        return await call.answer("Bonus kanal o'rnatilmagan.", show_alert=True)
+    u = store.get_user(call.from_user.id, call.from_user.username)
+    if u.get("bonus_claimed"):
+        await call.answer("✅ Siz bonusni allaqachon olgansiz.", show_alert=True)
+        return
+    if not await _is_channel_member(bot, bonus, call.from_user.id):
+        await call.answer("❌ Siz hali kanalga a'zo emassiz.", show_alert=True)
+        return
+    store.claim_bonus(call.from_user.id)
+    store.schedule_save(bot)
+    await call.message.edit_text("✅ Tabriklaymiz! +2 ta doimiy limit qo'shildi.")
+    await call.answer()
+
+
+@router.callback_query(F.data == "checkmandatory")
+async def cb_check_mandatory(call: CallbackQuery, bot: Bot):
+    mandatory = store.data.get("mandatory_channel")
+    if not mandatory:
+        await call.message.edit_text("✅ Endi botdan foydalanishingiz mumkin.")
+        return await call.answer()
+    if await _is_channel_member(bot, mandatory, call.from_user.id):
+        await call.message.edit_text("✅ Obuna tasdiqlandi! Endi rasm so'rovingizni yuboring.")
+    else:
+        await call.answer("❌ Siz hali kanalga a'zo emassiz.", show_alert=True)
+        return
+    await call.answer()
+
+
 @router.message(F.text == "✉️ Adminga murojaat")
 async def btn_admin_contact(message: Message, state: FSMContext):
     await state.clear()
@@ -236,24 +314,90 @@ async def admin_contact_message(message: Message, state: FSMContext, bot: Bot):
         await message.answer("❌ Hozircha yuborib bo'lmadi, keyinroq urinib ko'ring.")
 
 
-# ---------- Tarif sotib olish ----------
+# ---------- Admin/superadmin uchun: /start dagi inline menyu ----------
 
-@router.message(F.text == "💳 Tarif sotib olish")
-async def btn_tariff(message: Message, state: FSMContext):
+@router.callback_query(F.data.startswith("ustart:"))
+async def cb_ustart(call: CallbackQuery, state: FSMContext, bot: Bot):
+    action = call.data.split(":", 1)[1]
     await state.clear()
-    t = store.data["tariffs"]
-    lines = ["💳 Mavjud tariflar:\n"]
-    for name in TARIFF_ORDER:
-        if name == "free":
-            continue
-        info = t[name]
-        label = TARIFF_LABELS.get(name, name)
-        lines.append(
-            f"{label}: kuniga {info['daily_limit']} ta rasm — {info['price_stars']} ⭐/oy "
-            f"yoki {info['ref_required']} ta referal"
+
+    if action == "generate":
+        await call.message.answer("Qanday rasm yaratay? Promptni yozib yuboring (masalan: sunset over mountains).")
+
+    elif action == "limit":
+        u = store.get_user(call.from_user.id, call.from_user.username)
+        tariff = TARIFF_LABELS.get(u.get("tariff", "free"), "Free")
+        await call.message.answer(f"💳 Tarifingiz: {tariff}\n📊 Bugun {_left_text(call.from_user.id)} ta rasm yaratish imkoniyati qoldi.")
+
+    elif action == "code":
+        await call.message.answer("16 xonali kodni yuboring:")
+
+    elif action == "rating":
+        top = store.top_users(10)
+        if not top:
+            await call.message.answer("Hozircha reyting bo'sh — birinchi bo'lib rasm yarating! 🎨")
+        else:
+            medals = ["🥇", "🥈", "🥉"]
+            lines = ["🏆 Top 10 (eng ko'p rasm yaratganlar):\n"]
+            for i, (uid, u) in enumerate(top):
+                rank = medals[i] if i < 3 else f"{i + 1}."
+                name = u.get("username") or f"id{uid}"
+                lines.append(f"{rank} @{name} — {u.get('images_generated', 0)} ta rasm")
+            await call.message.answer("\n".join(lines))
+
+    elif action == "referral":
+        u = store.get_user(call.from_user.id, call.from_user.username)
+        username = await _get_bot_username(bot)
+        link = f"https://t.me/{username}?start=ref{call.from_user.id}"
+        pro_req = store.data["tariffs"]["pro"]["ref_required"]
+        plus_req = store.data["tariffs"]["plus"]["ref_required"]
+        await call.message.answer(
+            f"🔗 Sizning referal havolangiz:\n{link}\n\n"
+            f"👥 Hozirgi referallaringiz: {u.get('ref_count', 0)} ta\n\n"
+            f"{pro_req} ta referal → ⭐ Pro tarifi avtomatik beriladi\n"
+            f"{plus_req} ta referal → 💎 Plus tarifi avtomatik beriladi"
         )
-    lines.append("\nTanlang, admin bilan bog'lanamiz:")
-    await message.answer("\n".join(lines), reply_markup=tariff_purchase_kb())
+
+    elif action == "tariff":
+        t = store.data["tariffs"]
+        lines = ["💳 Mavjud tariflar:\n"]
+        for name in TARIFF_ORDER:
+            if name == "free":
+                continue
+            info = t[name]
+            label = TARIFF_LABELS.get(name, name)
+            lines.append(
+                f"{label}: kuniga {info['daily_limit']} ta rasm — {info['price_stars']} ⭐/oy "
+                f"yoki {info['ref_required']} ta referal"
+            )
+        lines.append("\nTanlang, admin bilan bog'lanamiz:")
+        await call.message.answer("\n".join(lines), reply_markup=tariff_purchase_kb())
+
+    elif action == "contact":
+        await state.set_state(UserContact.waiting_message)
+        await call.message.answer("✍️ Adminga qanday xabar/muammo yozmoqchisiz?")
+
+    elif action == "bonus":
+        bonus = store.data.get("bonus_channel")
+        if not bonus:
+            await call.message.answer("Hozircha bonus kanal o'rnatilmagan.")
+        else:
+            u = store.get_user(call.from_user.id, call.from_user.username)
+            if u.get("bonus_claimed"):
+                await call.message.answer("✅ Siz bonusni allaqachon olgansiz.")
+            else:
+                await call.message.answer(
+                    f"🎁 Kanalga a'zo bo'lsangiz +2 ta doimiy limit olasiz:\n@{bonus}",
+                    reply_markup=bonus_gate_kb(bonus),
+                )
+
+    elif action == "adminpanel":
+        if not store.is_admin_user(call.from_user.id):
+            await call.answer("🚫 Ruxsat yo'q.", show_alert=True)
+            return
+        await call.message.answer("🛠 Admin panel:", reply_markup=admin_panel())
+
+    await call.answer()
 
 
 @router.callback_query(F.data.startswith("tariffreq:"))
@@ -279,6 +423,24 @@ async def cb_tariff_request(call: CallbackQuery, bot: Bot):
     else:
         await call.message.answer("❌ Hozircha yuborib bo'lmadi, keyinroq urinib ko'ring.")
     await call.answer()
+
+
+@router.message(F.text == "💳 Tarif sotib olish")
+async def btn_tariff(message: Message, state: FSMContext):
+    await state.clear()
+    t = store.data["tariffs"]
+    lines = ["💳 Mavjud tariflar:\n"]
+    for name in TARIFF_ORDER:
+        if name == "free":
+            continue
+        info = t[name]
+        label = TARIFF_LABELS.get(name, name)
+        lines.append(
+            f"{label}: kuniga {info['daily_limit']} ta rasm — {info['price_stars']} ⭐/oy "
+            f"yoki {info['ref_required']} ta referal"
+        )
+    lines.append("\nTanlang, admin bilan bog'lanamiz:")
+    await message.answer("\n".join(lines), reply_markup=tariff_purchase_kb())
 
 
 @router.message(RequestTariff.waiting_message)

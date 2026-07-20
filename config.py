@@ -32,8 +32,8 @@ PORT = int(os.getenv("PORT", "10000"))
 DEFAULT_DAILY_LIMIT = 2
 
 # Tarif tizimi: kunlik limit, narx (Telegram Stars), qancha referal kerakligi va
-# kim bera olishi. Superadmin bularni /settariff komandasi orqali istagancha
-# o'zgartira oladi (bazadagi nusxasi o'zgaradi, shu yerdagi qiymat - default).
+# kim bera olishi. Superadmin bularni admin panel (inline tugmalar) orqali
+# istagancha o'zgartira oladi (bazadagi nusxasi o'zgaradi, shu yerdagi qiymat - default).
 DEFAULT_TARIFFS = {
     "free": {"daily_limit": 2, "price_stars": 0, "ref_required": 0, "grantable_by": "auto"},
     "pro":  {"daily_limit": 5, "price_stars": 15, "ref_required": 5, "grantable_by": "admin"},
@@ -42,6 +42,9 @@ DEFAULT_TARIFFS = {
 }
 TARIFF_ORDER = ["free", "pro", "plus", "vip"]
 TARIFF_LABELS = {"free": "🆓 Free", "pro": "⭐ Pro", "plus": "💎 Plus", "vip": "👑 VIP"}
+
+# Bonus kanalga a'zo bo'lgan har bir userga bir martalik, doimiy +N limit
+BONUS_LIMIT_AMOUNT = 2
 
 # Guruhga pin qilinadigan "database" fayl nomi (HTML - ko'rinishi chiroyli,
 # ichida esa qayta tiklash uchun JSON embed qilingan)

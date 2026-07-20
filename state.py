@@ -2,8 +2,8 @@
 "Database" qatlami.
 
 Ishlash printsipi:
-- Butun bot holati (userlar, tariflar, kodlar, taqiqlangan so'zlar, emoji ID'lar,
-  adminlar, rasm keshi) bitta JSON obyekt sifatida RAMda saqlanadi (CACHE).
+- Butun bot holati (userlar, tariflar, kodlar, taqiqlangan so'zlar, adminlar,
+  kanal sozlamalari, rasm keshi) bitta JSON obyekt sifatida RAMda saqlanadi (CACHE).
 - Har bir o'zgarishdan SAVE_DEBOUNCE_SECONDS soniya o'tib (bir nechta o'zgarish
   ketma-ket kelsa - bittasiga birlashtirilib) shu JSON chiroyli HTML hisobot
   ichiga (jadval + embed JSON) o'raladi, `bot_state.html` fayli sifatida DB
@@ -11,9 +11,9 @@ Ishlash printsipi:
 - Bot qayta ishga tushganda guruhdagi pin qilingan xabardan HTML faylni o'qib,
   ichidagi JSON'ni ajratib olib cache'ni tiklaydi.
 
-Limit tizimi endi TARIF asosida: har user "free"/"pro"/"plus"/"vip" tarifga ega,
-har tarifning o'z kunlik limiti bor (store.data["tariffs"] ichida, superadmin
-o'zgartira oladi). Superadmin/admin userga faqat TARIF beradi, raw limit emas.
+Limit tizimi TARIF asosida: har user "free"/"pro"/"plus"/"vip" tarifga ega,
+har tarifning o'z kunlik limiti bor. Ustiga bonus-kanal orqali +2 doimiy bonus
+qo'shilishi mumkin (bir marta, hammaga bir xil).
 """
 
 import asyncio
@@ -26,7 +26,7 @@ from aiogram.types import BufferedInputFile
 
 from config import (
     DB_GROUP_ID, STATE_FILENAME, SUPERADMIN_ID, SAVE_DEBOUNCE_SECONDS,
-    DEFAULT_TARIFFS, TARIFF_ORDER,
+    DEFAULT_TARIFFS, TARIFF_ORDER, BANNED_WORDS, BONUS_LIMIT_AMOUNT,
 )
 
 UNLIMITED = 10 ** 9  # superadmin/admin uchun "cheksiz" limit ko'rsatkichi
@@ -34,13 +34,12 @@ UNLIMITED = 10 ** 9  # superadmin/admin uchun "cheksiz" limit ko'rsatkichi
 _DEFAULT_STATE = {
     "users": {},            # str(user_id) -> user dict
     "admins": [],           # superadmin belgilagan qo'shimcha adminlar
-    "reaction_admins": [],  # kimlarning xabariga premium reaksiya bosiladi
-    "reaction_emoji_id": None,  # premium reaksiya uchun custom emoji id
-    "tariffs": DEFAULT_TARIFFS,  # superadmin o'zgartira oladigan tarif sozlamalari
+    "tariffs": DEFAULT_TARIFFS,   # superadmin o'zgartira oladigan tarif sozlamalari
     "codes": {},             # code -> {"tariff", "days", "used", "used_by"}
-    "banned_words": [],      # config.BANNED_WORDS ustiga runtime qo'shimchalar
-    "custom_emojis": {},     # key -> custom_emoji_id (xabarlarni emoji bilan bezash uchun)
+    "banned_words": list(BANNED_WORDS),  # to'liq runtime-tahrirlanadigan (add/remove) ro'yxat
     "image_cache": [],       # admin/superadmin DB ga tashlagan rasmlar: {file_id, by, at, caption}
+    "mandatory_channel": None,  # username (@ siz), bo'lmasa None
+    "bonus_channel": None,      # username (@ siz), bo'lmasa None
     "pinned_message_id": None,
 }
 
@@ -87,14 +86,18 @@ class Store:
                     u.setdefault("tariff_until", None)
                     u.setdefault("ref_count", 0)
                     u.setdefault("referred_by", None)
-                    # eski "daily_limit"/"extra_limit" maydonlari endi ishlatilmaydi,
-                    # lekin xatolik chiqmasligi uchun tegmasdan qoldiramiz.
+                    u.setdefault("bonus_limit", 0)
+                    u.setdefault("bonus_claimed", False)
 
-                # eski raw-limit kodlarini tarif tizimiga moslashtiramiz
                 for c in loaded.get("codes", {}).values():
                     if "tariff" not in c:
                         c["tariff"] = "pro"
                     c.setdefault("days", None)
+
+                # eski premium-emoji/reaksiya kalitlari endi ishlatilmaydi - shunchaki tashlab yuboramiz
+                loaded.pop("custom_emojis", None)
+                loaded.pop("reaction_admins", None)
+                loaded.pop("reaction_emoji_id", None)
 
                 if pinned.document.file_name == "bot_state.json":
                     loaded["pinned_message_id"] = None
@@ -176,11 +179,12 @@ class Store:
                 f"<td>{esc(u.get('images_generated', 0))}</td>"
                 f"<td>{esc(u.get('tariff', 'free'))}</td>"
                 f"<td>{esc(u.get('tariff_until') or 'doimiy')}</td>"
+                f"<td>{esc(u.get('bonus_limit', 0))}</td>"
                 f"<td>{esc(u.get('ref_count', 0))}</td>"
                 f"<td>{'🚫' if u.get('banned') else '—'}</td>"
                 "</tr>"
             )
-        users_table = "\n".join(user_rows) or "<tr><td colspan='8'>—</td></tr>"
+        users_table = "\n".join(user_rows) or "<tr><td colspan='9'>—</td></tr>"
 
         code_rows = []
         for code, c in d.get("codes", {}).items():
@@ -208,6 +212,7 @@ class Store:
         admins = d.get("admins", [])
         admin_rows = "".join(f"<li>{esc(a)}</li>" for a in admins) or "<li>—</li>"
         cache = d.get("image_cache", [])
+        words = d.get("banned_words", [])
 
         html_out = f"""<!DOCTYPE html>
 <html lang="uz"><head><meta charset="utf-8"><title>Bot Database</title>
@@ -222,6 +227,7 @@ tr:nth-child(even){{background:#151821}}
 </style></head><body>
 <h1>🗄 Bot Database</h1>
 <p class="meta">Superadmin: {esc(SUPERADMIN_ID)} | Yangilangan: {esc(date.today())}</p>
+<p class="meta">📢 Majburiy kanal: {esc(d.get('mandatory_channel') or '—')} | 🎁 Bonus kanal: {esc(d.get('bonus_channel') or '—')}</p>
 
 <h2>💳 Tariflar</h2>
 <table><tr><th>Nomi</th><th>Kunlik limit</th><th>Narx (stars)</th><th>Referal talabi</th><th>Kim beradi</th></tr>
@@ -229,7 +235,7 @@ tr:nth-child(even){{background:#151821}}
 </table>
 
 <h2>👥 Userlar ({len(users)} ta)</h2>
-<table><tr><th>ID</th><th>Username</th><th>Qo'shilgan</th><th>Rasmlar</th><th>Tarif</th><th>Muddat</th><th>Refs</th><th>Ban</th></tr>
+<table><tr><th>ID</th><th>Username</th><th>Qo'shilgan</th><th>Rasmlar</th><th>Tarif</th><th>Muddat</th><th>Bonus</th><th>Refs</th><th>Ban</th></tr>
 {users_table}
 </table>
 
@@ -240,6 +246,9 @@ tr:nth-child(even){{background:#151821}}
 
 <h2>🛠 Adminlar</h2>
 <ul>{admin_rows}</ul>
+
+<h2>🚫 Taqiqlangan so'zlar ({len(words)} ta)</h2>
+<p class="meta">{esc(", ".join(words))}</p>
 
 <h2>🖼 Rasm keshi ({len(cache)} ta)</h2>
 <p class="meta">Adminlar tomonidan DB ga qo'lda tashlangan rasmlar soni.</p>
@@ -277,6 +286,8 @@ tr:nth-child(even){{background:#151821}}
                 "generated_images": [],
                 "ref_count": 0,
                 "referred_by": None,
+                "bonus_limit": 0,
+                "bonus_claimed": False,
             }
         else:
             u = self.data["users"][uid]
@@ -288,6 +299,8 @@ tr:nth-child(even){{background:#151821}}
             u.setdefault("tariff_until", None)
             u.setdefault("ref_count", 0)
             u.setdefault("referred_by", None)
+            u.setdefault("bonus_limit", 0)
+            u.setdefault("bonus_claimed", False)
         return self.data["users"][uid]
 
     def _reset_if_new_day(self, user: dict):
@@ -310,7 +323,7 @@ tr:nth-child(even){{background:#151821}}
             return UNLIMITED
         user = self.get_user(user_id)
         self._reset_if_new_day(user)
-        daily = self.tariff_daily_limit(user.get("tariff", "free"))
+        daily = self.tariff_daily_limit(user.get("tariff", "free")) + user.get("bonus_limit", 0)
         return max(0, daily - user["used_today"])
 
     def consume_limit(self, user_id: int, amount: int = 1):
@@ -340,9 +353,8 @@ tr:nth-child(even){{background:#151821}}
     def set_banned(self, user_id: int, banned: bool):
         self.get_user(user_id)["banned"] = banned
 
-    def all_banned_words(self):
-        from config import BANNED_WORDS
-        return list(set(BANNED_WORDS) | set(self.data.get("banned_words", [])))
+    def all_banned_words(self) -> list:
+        return list(self.data.get("banned_words", []))
 
     def top_users(self, n: int = 10) -> list[tuple[str, dict]]:
         users = self.data.get("users", {})
@@ -352,15 +364,13 @@ tr:nth-child(even){{background:#151821}}
     # ---------- referal tizimi ----------
 
     def register_referral(self, referrer_id: int, new_user_id: int) -> tuple[bool, str | None]:
-        """Yangi user birinchi marta referal havola orqali kirganda chaqiriladi.
-        Qaytaradi: (hisoblandi_mi, agar avto-tarif berilgan bo'lsa yangi tarif nomi)."""
         if referrer_id == new_user_id:
             return False, None
         if str(referrer_id) not in self.data["users"]:
             return False, None
         new_user = self.get_user(new_user_id)
         if new_user.get("referred_by"):
-            return False, None  # allaqachon boshqa referaldan kirgan
+            return False, None
 
         new_user["referred_by"] = referrer_id
         referrer = self.get_user(referrer_id)
@@ -376,6 +386,47 @@ tr:nth-child(even){{background:#151821}}
                 upgraded_to = name
                 break
         return True, upgraded_to
+
+    # ---------- kanal tizimi ----------
+
+    def set_mandatory_channel(self, username: str):
+        self.data["mandatory_channel"] = username.lstrip("@").strip()
+
+    def clear_mandatory_channel(self):
+        self.data["mandatory_channel"] = None
+
+    def set_bonus_channel(self, username: str):
+        self.data["bonus_channel"] = username.lstrip("@").strip()
+
+    def clear_bonus_channel(self):
+        self.data["bonus_channel"] = None
+
+    def claim_bonus(self, user_id: int) -> bool:
+        """Bonus kanalga a'zo bo'lgani uchun +BONUS_LIMIT_AMOUNT bir martalik, doimiy bonus."""
+        user = self.get_user(user_id)
+        if user.get("bonus_claimed"):
+            return False
+        user["bonus_claimed"] = True
+        user["bonus_limit"] = user.get("bonus_limit", 0) + BONUS_LIMIT_AMOUNT
+        return True
+
+    # ---------- taqiqlangan so'zlar (endi to'liq tahrirlanadigan) ----------
+
+    def add_banned_word(self, word: str) -> bool:
+        word = word.strip()
+        if not word:
+            return False
+        words = self.data.setdefault("banned_words", [])
+        if word in words:
+            return False
+        words.append(word)
+        return True
+
+    def remove_banned_word_at(self, index: int) -> str | None:
+        words = self.data.get("banned_words", [])
+        if 0 <= index < len(words):
+            return words.pop(index)
+        return None
 
     # ---------- rasm keshi ----------
 

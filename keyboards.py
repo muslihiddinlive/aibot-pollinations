@@ -4,16 +4,31 @@ from aiogram.types import (
 )
 
 
-def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
+def main_menu(bonus_available: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="🎨 Rasm yaratish"), KeyboardButton(text="📊 Limitim")],
         [KeyboardButton(text="🔑 Kod kiritish"), KeyboardButton(text="🏆 Reyting")],
         [KeyboardButton(text="💳 Tarif sotib olish"), KeyboardButton(text="🔗 Referal havolam")],
         [KeyboardButton(text="✉️ Adminga murojaat")],
     ]
-    if is_admin:
-        keyboard.append([KeyboardButton(text="🛠 Admin panel")])
+    if bonus_available:
+        keyboard.append([KeyboardButton(text="🎁 Bonus olish")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def admin_start_menu() -> InlineKeyboardMarkup:
+    """Admin/superadmin /start bosganda - hammasi (oddiy user funksiyalari + admin panel) inline tugmalarda."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎨 Rasm yaratish", callback_data="ustart:generate")],
+        [InlineKeyboardButton(text="📊 Limitim", callback_data="ustart:limit"),
+         InlineKeyboardButton(text="🏆 Reyting", callback_data="ustart:rating")],
+        [InlineKeyboardButton(text="🔑 Kod kiritish", callback_data="ustart:code"),
+         InlineKeyboardButton(text="🔗 Referal havolam", callback_data="ustart:referral")],
+        [InlineKeyboardButton(text="💳 Tarif sotib olish", callback_data="ustart:tariff"),
+         InlineKeyboardButton(text="✉️ Adminga murojaat", callback_data="ustart:contact")],
+        [InlineKeyboardButton(text="🎁 Bonus olish", callback_data="ustart:bonus")],
+        [InlineKeyboardButton(text="🛠 Admin panel", callback_data="ustart:adminpanel")],
+    ])
 
 
 def admin_panel() -> InlineKeyboardMarkup:
@@ -23,9 +38,7 @@ def admin_panel() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔑 Tarif-kod yaratish", callback_data="admgencode")],
         [InlineKeyboardButton(text="💳 Tariflar sozlamasi", callback_data="admtariffs")],
         [InlineKeyboardButton(text="🚫 Taqiqlangan so'zlar", callback_data="admwords")],
-        [InlineKeyboardButton(text="😀 Custom emoji", callback_data="admemoji")],
-        [InlineKeyboardButton(text="✏️ Xabarni emoji bilan tahrirlash", callback_data="admeditemoji")],
-        [InlineKeyboardButton(text="⭐️ Premium reaksiya adminlari", callback_data="admreactions")],
+        [InlineKeyboardButton(text="📡 Kanal sozlamalari", callback_data="admchannels")],
         [InlineKeyboardButton(text="🛠 Adminlar (superadmin)", callback_data="admmanageadmins")],
     ])
 
@@ -67,8 +80,6 @@ def user_detail_kb(uid: str) -> InlineKeyboardMarkup:
 
 
 def tariff_choice_kb(callback_prefix: str, tariffs: list, uid: str = "") -> InlineKeyboardMarkup:
-    """callback_prefix: masalan 'admgrant' yoki 'admgencodetariff'.
-    tariffs: shu adminga ruxsat etilgan tarif nomlari ro'yxati."""
     from config import TARIFF_LABELS
     suffix = f":{uid}" if uid else ""
     rows = [
@@ -80,7 +91,8 @@ def tariff_choice_kb(callback_prefix: str, tariffs: list, uid: str = "") -> Inli
 
 
 def manage_admins_kb(admins: list) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=f"❌ {a}", callback_data=f"admdeladmin:{a}")] for a in admins]
+    rows = [[InlineKeyboardButton(text="➕ Admin qo'shish", callback_data="admaddadmin")]]
+    rows += [[InlineKeyboardButton(text=f"❌ {a}", callback_data=f"admdeladmin:{a}")] for a in admins]
     rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admcancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -90,4 +102,70 @@ def tariff_purchase_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⭐ Pro so'rash", callback_data="tariffreq:pro")],
         [InlineKeyboardButton(text="💎 Plus so'rash", callback_data="tariffreq:plus")],
         [InlineKeyboardButton(text="👑 VIP so'rash", callback_data="tariffreq:vip")],
+    ])
+
+
+# ---------- Taqiqlangan so'zlar (to'liq inline boshqaruv) ----------
+
+def words_kb(words: list) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text="➕ So'z qo'shish", callback_data="wordadd")]]
+    for i, w in enumerate(words):
+        label = w if len(w) <= 20 else w[:20] + "…"
+        rows.append([InlineKeyboardButton(text=f"❌ {label}", callback_data=f"worddel:{i}")])
+    rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admcancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ---------- Tariflar - inline tahrirlash ----------
+
+def tariffs_kb(tariffs: dict) -> InlineKeyboardMarkup:
+    from config import TARIFF_LABELS, TARIFF_ORDER
+    rows = []
+    for name in TARIFF_ORDER:
+        t = tariffs.get(name, {})
+        label = TARIFF_LABELS.get(name, name)
+        rows.append([InlineKeyboardButton(
+            text=f"✏️ {label}: {t.get('daily_limit')}/kun, {t.get('price_stars')}⭐, {t.get('ref_required')}ref",
+            callback_data=f"tariffedit:{name}",
+        )])
+    rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admcancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def tariff_field_kb(name: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Kunlik limit", callback_data=f"tariffeditfield:{name}:daily_limit")],
+        [InlineKeyboardButton(text="⭐ Narx (stars)", callback_data=f"tariffeditfield:{name}:price_stars")],
+        [InlineKeyboardButton(text="🔗 Referal talabi", callback_data=f"tariffeditfield:{name}:ref_required")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="admtariffs")],
+    ])
+
+
+# ---------- Kanal sozlamalari ----------
+
+def channels_kb(mandatory: str | None, bonus: str | None) -> InlineKeyboardMarkup:
+    rows = []
+    if mandatory:
+        rows.append([InlineKeyboardButton(text=f"❌ Majburiy kanalni o'chirish (@{mandatory})", callback_data="chanclear:mandatory")])
+    else:
+        rows.append([InlineKeyboardButton(text="📢 Majburiy kanal o'rnatish", callback_data="chanset:mandatory")])
+    if bonus:
+        rows.append([InlineKeyboardButton(text=f"❌ Bonus kanalni o'chirish (@{bonus})", callback_data="chanclear:bonus")])
+    else:
+        rows.append([InlineKeyboardButton(text="🎁 Bonus kanal o'rnatish", callback_data="chanset:bonus")])
+    rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admcancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def mandatory_gate_kb(username: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➡️ Kanalga o'tish", url=f"https://t.me/{username}")],
+        [InlineKeyboardButton(text="✅ Obuna bo'ldim", callback_data="checkmandatory")],
+    ])
+
+
+def bonus_gate_kb(username: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➡️ Kanalga o'tish", url=f"https://t.me/{username}")],
+        [InlineKeyboardButton(text="✅ Tekshirish", callback_data="checkbonus")],
     ])

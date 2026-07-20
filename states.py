@@ -12,6 +12,11 @@ class TariffGrant(StatesGroup):
     waiting_days = State()
 
 
+class TariffEdit(StatesGroup):
+    """Superadmin tarif parametrini (kunlik limit/narx/referal) inline tahrirlaydi."""
+    waiting_value = State()
+
+
 class Broadcast(StatesGroup):
     waiting_text = State()
 
@@ -23,19 +28,17 @@ class SendToUser(StatesGroup):
 
 class WordsManage(StatesGroup):
     waiting_add = State()
-    waiting_remove = State()
 
 
-class EmojiManage(StatesGroup):
-    waiting_add_key = State()
-    waiting_add_id = State()
-    waiting_remove_key = State()
+class AdminAdd(StatesGroup):
+    """Superadmin yangi admin qo'shadi (inline tugma + user_id kiritish)."""
+    waiting_id = State()
 
 
-class EditMessageEmoji(StatesGroup):
-    """Bot o'zi yuborgan xabarni premium emoji bilan qayta tahrirlash."""
-    waiting_target = State()   # "chat_id:message_id"
-    waiting_text = State()     # {key} placeholderlar bilan matn
+class ChannelSetup(StatesGroup):
+    """Majburiy/bonus kanal username'ini kiritish."""
+    waiting_mandatory = State()
+    waiting_bonus = State()
 
 
 class RequestTariff(StatesGroup):

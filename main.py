@@ -12,7 +12,7 @@ from config import (
 )
 from state import store
 from queue_worker import gen_queue
-from handlers import admin, user, reactions
+from handlers import admin, user
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,12 +20,10 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTM
 dp = Dispatcher(storage=MemoryStorage())
 
 # TARTIB MUHIM:
-# 1) admin - komandalar va FSM holatlari (masalan broadcast matni kutish)
-# 2) user  - /generate, oddiy matn (prompt sifatida)
-# 3) reactions - faqat guruh xabarlari, eng oxirida, hech narsani "yutmasin"
+# 1) admin - inline callbacklar va FSM holatlari (masalan broadcast matni kutish)
+# 2) user  - /start, oddiy matn (prompt sifatida)
 dp.include_router(admin.router)
 dp.include_router(user.router)
-dp.include_router(reactions.router)
 
 
 async def health(request: web.Request) -> web.Response:
