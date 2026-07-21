@@ -49,3 +49,8 @@ python main.py
 5. Kod hozircha rate-limit/concurrency uchun semaphore (5 parallel) va per-request
    timeout (60s) bilan himoyalangan, lekin juda yuqori yuklamada (yuzlab bir vaqtdagi
    user) qo'shimcha optimizatsiya (masalan navbat/worker pool) kerak bo'lishi mumkin.
+
+
+
+
+#Eslatma: pollinations o'zbek tilini yahshi tushunmaydi, shuing uchun prompt ingliz tilida berish yoki shu profilimdagi AIimagegeneratoradvanced ni ishlatish tavsiya qilinadi, u yerga groq API key qo''yiladi, bo'lmasa natija bir hil
