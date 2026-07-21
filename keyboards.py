@@ -55,7 +55,8 @@ def users_list_kb(users: dict, page: int = 0, per_page: int = 15) -> InlineKeybo
     chunk = items[start:start + per_page]
     rows = []
     for uid, u in chunk:
-        label = f"👤 {u.get('username') or uid} | 🖼{u.get('images_generated', 0)}"
+        name = u.get("username") and f"@{u['username']}" or u.get("full_name") or uid
+        label = f"👤 {name} | 🖼{u.get('images_generated', 0)}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"admuser:{uid}")])
 
     nav = []

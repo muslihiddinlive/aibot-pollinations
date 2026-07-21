@@ -106,7 +106,7 @@ async def _generate_job(message: Message, bot: Bot, prompt: str, user_id: int, s
 
 async def _do_generate(message: Message, bot: Bot, prompt: str):
     user = message.from_user
-    u = store.get_user(user.id, user.username)
+    u = store.get_user(user.id, user.username, user.full_name)
 
     if u.get("banned"):
         await message.answer("🚫 Siz botdan foydalanishdan taqiqlangansiz.")
@@ -150,7 +150,7 @@ async def _do_generate(message: Message, bot: Bot, prompt: str):
 async def cmd_start(message: Message, bot: Bot, state: FSMContext, command: CommandObject):
     await state.clear()
     is_new = str(message.from_user.id) not in store.data["users"]
-    store.get_user(message.from_user.id, message.from_user.username)
+    store.get_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
 
     if is_new and command.args and command.args.startswith("ref"):
         try:
@@ -193,7 +193,7 @@ async def btn_generate(message: Message, state: FSMContext):
 @router.message(F.text == "📊 Limitim")
 async def btn_limit(message: Message, state: FSMContext):
     await state.clear()
-    u = store.get_user(message.from_user.id, message.from_user.username)
+    u = store.get_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
     tariff = TARIFF_LABELS.get(u.get("tariff", "free"), "Free")
     await message.answer(f"💳 Tarifingiz: {tariff}\n📊 Bugun {_left_text(message.from_user.id)} ta rasm yaratish imkoniyati qoldi.")
 
@@ -223,7 +223,7 @@ async def btn_rating(message: Message, state: FSMContext):
 @router.message(F.text == "🔗 Referal havolam")
 async def btn_referral(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
-    u = store.get_user(message.from_user.id, message.from_user.username)
+    u = store.get_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
     username = await _get_bot_username(bot)
     link = f"https://t.me/{username}?start=ref{message.from_user.id}"
     pro_req = store.data["tariffs"]["pro"]["ref_required"]
@@ -243,7 +243,7 @@ async def btn_bonus(message: Message, state: FSMContext):
     if not bonus:
         await message.answer("Hozircha bonus kanal o'rnatilmagan.")
         return
-    u = store.get_user(message.from_user.id, message.from_user.username)
+    u = store.get_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
     if u.get("bonus_claimed"):
         await message.answer("✅ Siz bonusni allaqachon olgansiz.")
         return
@@ -258,7 +258,7 @@ async def cb_check_bonus(call: CallbackQuery, bot: Bot):
     bonus = store.data.get("bonus_channel")
     if not bonus:
         return await call.answer("Bonus kanal o'rnatilmagan.", show_alert=True)
-    u = store.get_user(call.from_user.id, call.from_user.username)
+    u = store.get_user(call.from_user.id, call.from_user.username, call.from_user.full_name)
     if u.get("bonus_claimed"):
         await call.answer("✅ Siz bonusni allaqachon olgansiz.", show_alert=True)
         return
@@ -325,7 +325,7 @@ async def cb_ustart(call: CallbackQuery, state: FSMContext, bot: Bot):
         await call.message.answer("Qanday rasm yaratay? Promptni yozib yuboring (masalan: sunset over mountains).")
 
     elif action == "limit":
-        u = store.get_user(call.from_user.id, call.from_user.username)
+        u = store.get_user(call.from_user.id, call.from_user.username, call.from_user.full_name)
         tariff = TARIFF_LABELS.get(u.get("tariff", "free"), "Free")
         await call.message.answer(f"💳 Tarifingiz: {tariff}\n📊 Bugun {_left_text(call.from_user.id)} ta rasm yaratish imkoniyati qoldi.")
 
@@ -346,7 +346,7 @@ async def cb_ustart(call: CallbackQuery, state: FSMContext, bot: Bot):
             await call.message.answer("\n".join(lines))
 
     elif action == "referral":
-        u = store.get_user(call.from_user.id, call.from_user.username)
+        u = store.get_user(call.from_user.id, call.from_user.username, call.from_user.full_name)
         username = await _get_bot_username(bot)
         link = f"https://t.me/{username}?start=ref{call.from_user.id}"
         pro_req = store.data["tariffs"]["pro"]["ref_required"]
@@ -382,7 +382,7 @@ async def cb_ustart(call: CallbackQuery, state: FSMContext, bot: Bot):
         if not bonus:
             await call.message.answer("Hozircha bonus kanal o'rnatilmagan.")
         else:
-            u = store.get_user(call.from_user.id, call.from_user.username)
+            u = store.get_user(call.from_user.id, call.from_user.username, call.from_user.full_name)
             if u.get("bonus_claimed"):
                 await call.message.answer("✅ Siz bonusni allaqachon olgansiz.")
             else:

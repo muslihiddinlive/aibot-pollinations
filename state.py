@@ -88,6 +88,7 @@ class Store:
                     u.setdefault("referred_by", None)
                     u.setdefault("bonus_limit", 0)
                     u.setdefault("bonus_claimed", False)
+                    u.setdefault("full_name", None)
 
                 for c in loaded.get("codes", {}).values():
                     if "tariff" not in c:
@@ -171,10 +172,11 @@ class Store:
         user_rows = []
         for uid, u in sorted(users.items(), key=lambda kv: -kv[1].get("images_generated", 0)):
             tag = " ⭐" if int(uid) in ({SUPERADMIN_ID} | set(d.get("admins", []))) else ""
+            name = (f"@{u['username']}" if u.get("username") else u.get("full_name")) or "—"
             user_rows.append(
                 "<tr>"
                 f"<td>{esc(uid)}{tag}</td>"
-                f"<td>{esc(u.get('username') or '—')}</td>"
+                f"<td>{esc(name)}</td>"
                 f"<td>{esc(u.get('first_seen', '—'))}</td>"
                 f"<td>{esc(u.get('images_generated', 0))}</td>"
                 f"<td>{esc(u.get('tariff', 'free'))}</td>"
@@ -269,12 +271,13 @@ tr:nth-child(even){{background:#151821}}
 
     # ---------- user helpers ----------
 
-    def get_user(self, user_id: int, username: str | None = None) -> dict:
+    def get_user(self, user_id: int, username: str | None = None, full_name: str | None = None) -> dict:
         uid = str(user_id)
         if uid not in self.data["users"]:
             self.data["users"][uid] = {
                 "id": user_id,
                 "username": username,
+                "full_name": full_name,
                 "first_seen": str(date.today()),
                 "tariff": "free",
                 "tariff_until": None,   # None = muddatsiz; aks holda "YYYY-MM-DD"
@@ -293,6 +296,9 @@ tr:nth-child(even){{background:#151821}}
             u = self.data["users"][uid]
             if username:
                 u["username"] = username
+            if full_name:
+                u["full_name"] = full_name
+            u.setdefault("full_name", None)
             u.setdefault("images_generated", 0)
             u.setdefault("generated_images", [])
             u.setdefault("tariff", "free")
@@ -302,6 +308,15 @@ tr:nth-child(even){{background:#151821}}
             u.setdefault("bonus_limit", 0)
             u.setdefault("bonus_claimed", False)
         return self.data["users"][uid]
+
+    def display_name(self, uid: str) -> str:
+        """Ko'rsatish uchun eng yaxshi mavjud ism: @username > full_name > ID."""
+        u = self.data["users"].get(uid, {})
+        if u.get("username"):
+            return f"@{u['username']}"
+        if u.get("full_name"):
+            return u["full_name"]
+        return f"id{uid}"
 
     def _reset_if_new_day(self, user: dict):
         today = str(date.today())

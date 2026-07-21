@@ -88,8 +88,9 @@ async def _render_user_detail(call: CallbackQuery, uid: str):
     tariff_text = TARIFF_LABELS.get(tariff, tariff)
     tariff_text += f" ({u['tariff_until']} gacha)" if u.get("tariff_until") else " (doimiy)"
     ban_text = "ha" if u.get("banned") else "yo'q"
+    display_name = (f"@{u['username']}" if u.get("username") else u.get("full_name")) or f"id{uid}"
     text = (
-        f"👤 <b>{u.get('username') or '—'}</b>\n"
+        f"👤 <b>{display_name}</b>\n"
         f"🆔 ID: <code>{uid}</code>\n"
         f"📅 Qo'shilgan: {u.get('first_seen', '—')}\n"
         f"🖼 Yaratgan rasmlar: {u.get('images_generated', 0)}\n"
